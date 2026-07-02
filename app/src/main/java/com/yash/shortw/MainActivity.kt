@@ -79,7 +79,8 @@ data class AppSettings(
   val windowOpacity: Float = 0.95f,
   val triggerAction: Int = 0, // 0 = Swipe, 1 = Single Tap, 2 = Double Tap
   val triggerColorArgb: Int = 0xFF1976D2.toInt(), // ElectricBlue
-  val triggerGradientColorArgb: Int? = null
+  val triggerGradientColorArgb: Int? = null,
+  val triggerMode: Int = 0 // 0 = Visual Slider, 1 = Full Screen Edge
 ) {
   val triggerColor: Color get() = Color(triggerColorArgb)
   val triggerGradientColor: Color? get() = triggerGradientColorArgb?.let { Color(it) }
@@ -741,6 +742,28 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
         }
         
         Column {
+          Text("Trigger Mode", color = GhostWhite)
+          Spacer(modifier = Modifier.height(8.dp))
+          Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Obsidian)
+          ) {
+            val modes = listOf("Visual Slider", "Full Screen Edge")
+            modes.forEachIndexed { index, name ->
+              Box(
+                modifier = Modifier
+                  .weight(1f)
+                  .clickable { AppState.settings = AppState.settings.copy(triggerMode = index) }
+                  .background(if (AppState.settings.triggerMode == index) NeonPurple else Color.Transparent)
+                  .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+              ) {
+                  Text(name, color = GhostWhite, fontSize = 12.sp)
+              }
+            }
+          }
+        }
+        
+        Column {
           Text("Slider Color", color = GhostWhite)
           Spacer(modifier = Modifier.height(8.dp))
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
@@ -915,20 +938,21 @@ fun TriggerComponent() {
     }
     
     val animatedWidth by animateFloatAsState(
-        targetValue = if (isNotifying) AppState.settings.triggerThickness * 2.5f else if (isDragging) AppState.settings.triggerThickness * 1.5f else AppState.settings.triggerThickness
+        targetValue = if (AppState.settings.triggerMode == 1) 12f else if (isNotifying) AppState.settings.triggerThickness * 2.5f else if (isDragging) AppState.settings.triggerThickness * 1.5f else AppState.settings.triggerThickness
     )
     val animatedHeight by animateFloatAsState(
-        targetValue = if (isNotifying) AppState.settings.triggerHeight * 1.2f else if (isDragging) AppState.settings.triggerHeight * 1.1f else AppState.settings.triggerHeight
+        targetValue = if (AppState.settings.triggerMode == 1) 300f else if (isNotifying) AppState.settings.triggerHeight * 1.2f else if (isDragging) AppState.settings.triggerHeight * 1.1f else AppState.settings.triggerHeight
     )
     val animatedAlpha by animateFloatAsState(
-        targetValue = if (isNotifying) 1f else if (isDragging) 1f else 0.7f
+        targetValue = if (AppState.settings.triggerMode == 1) 0f else if (isNotifying) 1f else if (isDragging) 1f else 0.7f
     )
     val notifyGlowAlpha by animateFloatAsState(targetValue = if (isNotifying) 0.6f else 0f)
 
     Box(
         modifier = Modifier
         .width(animatedWidth.dp)
-        .height(animatedHeight.dp)
+        .fillMaxHeight(if (AppState.settings.triggerMode == 1) 1f else 0f)
+        .height(if (AppState.settings.triggerMode == 1) 0.dp else animatedHeight.dp)
         .clip(RoundedCornerShape(animatedWidth.dp / 2))
         .background(
             if (AppState.settings.triggerGradientColor != null) 
@@ -946,47 +970,60 @@ fun TriggerComponent() {
         }
         .pointerInput(AppState.settings.triggerAction) {
             detectTapGestures(
-                onPress = { 
-                    isDragging = true
-                    tryAwaitRelease()
-                    isDragging = false
-                },
                 onDoubleTap = { if (AppState.settings.triggerAction == 2) AppState.sidebarVisible = true },
-                onTap = { if (AppState.settings.triggerAction == 1) AppState.sidebarVisible = true },
-                onLongPress = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    AppState.settings = AppState.settings.copy(isRightEdge = !AppState.settings.isRightEdge)
-                    AppState.saveSettings(context)
-                }
+                onTap = { if (AppState.settings.triggerAction == 1) AppState.sidebarVisible = true }
             )
         }
         .pointerInput(AppState.settings.isRightEdge, AppState.settings.triggerAction) {
             detectDragGestures(
                 onDragStart = { 
                     isDragging = true 
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 },
                 onDragEnd = { 
                     isDragging = false 
-                    AppState.saveSettings(context)
                 },
                 onDragCancel = { 
                     isDragging = false 
-                    AppState.saveSettings(context)
                 }
             ) { change, dragAmount ->
                 change.consume()
-                if (isDragging) {
+                if (AppState.settings.triggerAction == 0) {
                     val dx = if (AppState.settings.isRightEdge) -with(density) { dragAmount.x.toDp().value } else with(density) { dragAmount.x.toDp().value }
                     val dy = with(density) { dragAmount.y.toDp().value }
-                    
-                    if (AppState.settings.triggerAction == 0 && dx > 5 && kotlin.math.abs(dx) > kotlin.math.abs(dy) && !AppState.sidebarVisible) {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    if (dx > 5 && kotlin.math.abs(dx) > kotlin.math.abs(dy) && !AppState.sidebarVisible) {
                         AppState.sidebarVisible = true
-                    } else {
-                        AppState.settings = AppState.settings.copy(
-                            triggerOffsetY = (AppState.settings.triggerOffsetY + dy).coerceIn(-400f, 400f)
-                        )
+                    }
+                }
+            }
+        }
+        .pointerInput(AppState.settings.isRightEdge, AppState.settings.triggerMode) {
+            if (AppState.settings.triggerMode == 0) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { 
+                        isDragging = true 
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    },
+                    onDragEnd = { 
+                        isDragging = false 
+                        AppState.saveSettings(context)
+                    },
+                    onDragCancel = { 
+                        isDragging = false 
+                        AppState.saveSettings(context)
+                    }
+                ) { change, dragAmount ->
+                    change.consume()
+                    val dy = with(density) { dragAmount.y.toDp().value }
+                    val dx = with(density) { dragAmount.x.toDp().value }
+                    
+                    AppState.settings = AppState.settings.copy(
+                        triggerOffsetY = (AppState.settings.triggerOffsetY + dy).coerceIn(-400f, 400f)
+                    )
+                    
+                    if (AppState.settings.isRightEdge && dx < -50) {
+                        AppState.settings = AppState.settings.copy(isRightEdge = false)
+                    } else if (!AppState.settings.isRightEdge && dx > 50) {
+                        AppState.settings = AppState.settings.copy(isRightEdge = true)
                     }
                 }
             }

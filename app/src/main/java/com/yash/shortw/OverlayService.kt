@@ -141,16 +141,17 @@ class OverlayService : Service() {
                 }
             }
         }
+        val isFullScreen = AppState.settings.triggerMode == 1
         val params = WindowManager.LayoutParams(
-            dpToPx(AppState.settings.triggerThickness),
-            dpToPx(AppState.settings.triggerHeight),
+            if (isFullScreen) dpToPx(12f) else dpToPx(AppState.settings.triggerThickness),
+            if (isFullScreen) WindowManager.LayoutParams.MATCH_PARENT else dpToPx(AppState.settings.triggerHeight),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = if (AppState.settings.isRightEdge) Gravity.CENTER_VERTICAL or Gravity.END else Gravity.CENTER_VERTICAL or Gravity.START
             x = dpToPx(AppState.settings.triggerOffsetX)
-            y = dpToPx(AppState.settings.triggerOffsetY)
+            y = if (isFullScreen) 0 else dpToPx(AppState.settings.triggerOffsetY)
         }
         if (android.provider.Settings.canDrawOverlays(this)) {
             try {
@@ -169,10 +170,11 @@ class OverlayService : Service() {
             snapshotFlow { AppState.settings }.collect { settings ->
                 triggerView?.let { view ->
                     val p = view.layoutParams as WindowManager.LayoutParams
-                    p.width = dpToPx(settings.triggerThickness)
-                    p.height = dpToPx(settings.triggerHeight)
+                    val isFullScreen = settings.triggerMode == 1
+                    p.width = if (isFullScreen) dpToPx(12f) else dpToPx(settings.triggerThickness)
+                    p.height = if (isFullScreen) WindowManager.LayoutParams.MATCH_PARENT else dpToPx(settings.triggerHeight)
                     p.x = dpToPx(settings.triggerOffsetX)
-                    p.y = dpToPx(settings.triggerOffsetY)
+                    p.y = if (isFullScreen) 0 else dpToPx(settings.triggerOffsetY)
                     p.gravity = if (settings.isRightEdge) Gravity.CENTER_VERTICAL or Gravity.END else Gravity.CENTER_VERTICAL or Gravity.START
                     windowManager.updateViewLayout(view, p)
                 }
