@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">short_w</string>
+    <string name="shortcut_toggle_short">Settings</string>
+    <string name="shortcut_toggle_long">Open Panel Settings</string>
+</resources>
