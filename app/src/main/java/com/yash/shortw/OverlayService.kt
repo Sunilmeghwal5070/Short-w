@@ -100,7 +100,11 @@ class OverlayService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
             .setContentIntent(pendingIntent)
             .build()
-        startForeground(1, notification)
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(1, notification)
+        }
         
         setupTrigger()
         
@@ -173,6 +177,14 @@ class OverlayService : Service() {
     private fun showSidebar() {
         if (sidebarView != null) return
         sidebarView = ComposeView(this).apply {
+            setOnKeyListener { _, keyCode, event ->
+                if (keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_UP) {
+                    AppState.sidebarVisible = false
+                    true
+                } else {
+                    false
+                }
+            }
             setupForCompose()
             setContent {
                 MyApplicationTheme {
@@ -216,7 +228,7 @@ class OverlayService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         )
         if (android.provider.Settings.canDrawOverlays(this)) {
@@ -276,6 +288,14 @@ class OverlayService : Service() {
         for (id in toAdd) {
             val windowData = windows.first { it.id == id }
             val view = ComposeView(this).apply {
+                setOnKeyListener { _, keyCode, event ->
+                    if (keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_UP) {
+                        AppState.windows.removeAll { it.id == id }
+                        true
+                    } else {
+                        false
+                    }
+                }
                 setupForCompose()
                 setContent {
                     MyApplicationTheme {
@@ -297,11 +317,17 @@ class OverlayService : Service() {
                     }
                 }
             }
+            val needsFocus = windowData.title == "Universal Clipboard"
+            val flags = if (needsFocus) {
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            } else {
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            }
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                flags,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START

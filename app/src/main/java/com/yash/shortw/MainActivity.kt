@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -66,6 +67,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.max
 
+import androidx.compose.ui.graphics.toArgb
+
 data class AppSettings(
   val triggerThickness: Float = 6f,
   val triggerHeight: Float = 100f,
@@ -75,9 +78,12 @@ data class AppSettings(
   val sidebarOpacity: Float = 0.85f,
   val windowOpacity: Float = 0.95f,
   val triggerAction: Int = 0, // 0 = Swipe, 1 = Single Tap, 2 = Double Tap
-  val triggerColor: Color = Color(0xFF1976D2), // ElectricBlue
-  val triggerGradientColor: Color? = null
-)
+  val triggerColorArgb: Int = 0xFF1976D2.toInt(), // ElectricBlue
+  val triggerGradientColorArgb: Int? = null
+) {
+  val triggerColor: Color get() = Color(triggerColorArgb)
+  val triggerGradientColor: Color? get() = triggerGradientColorArgb?.let { Color(it) }
+}
 
 data class AppInfo(
   val name: String,
@@ -106,6 +112,8 @@ object AppState {
   var isServiceRunning by mutableStateOf(false)
   var hasOverlayPermission by mutableStateOf(false)
   var hasNotificationPermission by mutableStateOf(false)
+  var hasNotificationListenerPermission by mutableStateOf(false)
+  var notificationTrigger by mutableStateOf(0)
   var hasWriteSettingsPermission by mutableStateOf(false)
   var settings by mutableStateOf(AppSettings())
   var sidebarVisible by mutableStateOf(false)
@@ -116,6 +124,7 @@ object AppState {
   var floatingApps = mutableStateListOf<String>() // Package names
   var visibleTools = mutableStateListOf<String>("Macro & Auto-Clicker", "Live Screen OCR", "Universal Clipboard", "Floating System Monitor")
   var visibleControls = mutableStateListOf<String>("Wi-Fi", "Bluetooth", "Data", "Ghost Mode", "Brightness", "Volume")
+  var clipboardHistory = mutableStateListOf<String>()
   var windowIdCounter = 0
   
   fun saveSettings(context: android.content.Context) {
@@ -127,35 +136,59 @@ object AppState {
           putString("floatingApps", gson.toJson(floatingApps.toList()))
           putString("visibleTools", gson.toJson(visibleTools.toList()))
           putString("visibleControls", gson.toJson(visibleControls.toList()))
+          putString("clipboardHistory", gson.toJson(clipboardHistory.toList()))
       }.apply()
   }
   
   fun loadSettings(context: android.content.Context) {
       val prefs = context.getSharedPreferences("ApexPanelPrefs", android.content.Context.MODE_PRIVATE)
       val gson = com.google.gson.Gson()
-      prefs.getString("settings", null)?.let { settings = gson.fromJson(it, AppSettings::class.java) }
+      try {
+          prefs.getString("settings", null)?.let { settings = gson.fromJson(it, AppSettings::class.java) }
+      } catch (e: Exception) {
+          e.printStackTrace()
+      }
       
       val type = object : com.google.gson.reflect.TypeToken<List<String>>() {}.type
-      prefs.getString("pinnedApps", null)?.let { 
-          val list: List<String> = gson.fromJson(it, type)
-          pinnedApps.clear()
-          pinnedApps.addAll(list)
+      prefs.getString("clipboardHistory", null)?.let { 
+          try {
+              val list: List<String> = gson.fromJson(it, type)
+              clipboardHistory.clear()
+              clipboardHistory.addAll(list)
+          } catch(e: Exception) {}
       }
-      prefs.getString("floatingApps", null)?.let { 
-          val list: List<String> = gson.fromJson(it, type)
-          floatingApps.clear()
-          floatingApps.addAll(list)
-      }
-      prefs.getString("visibleTools", null)?.let { 
-          val list: List<String> = gson.fromJson(it, type)
-          visibleTools.clear()
-          visibleTools.addAll(list)
-      }
-      prefs.getString("visibleControls", null)?.let { 
-          val list: List<String> = gson.fromJson(it, type)
-          visibleControls.clear()
-          visibleControls.addAll(list)
-      }
+      
+      try {
+          prefs.getString("pinnedApps", null)?.let { 
+              val list: List<String> = gson.fromJson(it, type)
+              pinnedApps.clear()
+              pinnedApps.addAll(list)
+          }
+      } catch (e: Exception) { e.printStackTrace() }
+      
+      try {
+          prefs.getString("floatingApps", null)?.let { 
+              val list: List<String> = gson.fromJson(it, type)
+              floatingApps.clear()
+              floatingApps.addAll(list)
+          }
+      } catch (e: Exception) { e.printStackTrace() }
+      
+      try {
+          prefs.getString("visibleTools", null)?.let { 
+              val list: List<String> = gson.fromJson(it, type)
+              visibleTools.clear()
+              visibleTools.addAll(list)
+          }
+      } catch (e: Exception) { e.printStackTrace() }
+      
+      try {
+          prefs.getString("visibleControls", null)?.let { 
+              val list: List<String> = gson.fromJson(it, type)
+              visibleControls.clear()
+              visibleControls.addAll(list)
+          }
+      } catch (e: Exception) { e.printStackTrace() }
   }
 
   fun fetchApps(context: android.content.Context) {
@@ -218,6 +251,7 @@ class MainActivity : ComponentActivity() {
     } else {
         true
     }
+    AppState.hasNotificationListenerPermission = androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -458,8 +492,12 @@ fun PermissionScreen() {
                     description = "Required for sidebar and floating windows",
                     isGranted = AppState.hasOverlayPermission,
                     onClick = {
-                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
-                        context.startActivity(intent)
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Cannot open settings", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 )
                 
@@ -468,8 +506,12 @@ fun PermissionScreen() {
                     description = "Required for brightness control",
                     isGranted = AppState.hasWriteSettingsPermission,
                     onClick = {
-                        val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${context.packageName}"))
-                        context.startActivity(intent)
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${context.packageName}"))
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Cannot open settings", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 )
                 
@@ -483,6 +525,20 @@ fun PermissionScreen() {
                         }
                     )
                 }
+                
+                PermissionItem(
+                    title = "Notification Access",
+                    description = "Required for slider glow on notification",
+                    isGranted = AppState.hasNotificationListenerPermission,
+                    onClick = {
+                        try {
+                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Cannot open settings", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
             }
         }
     }
@@ -551,6 +607,10 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
         Switch(
           checked = AppState.isServiceRunning,
           onCheckedChange = { 
+              if (it && !AppState.hasOverlayPermission) {
+                  Toast.makeText(context, "Overlay permission is required", Toast.LENGTH_SHORT).show()
+                  return@Switch
+              }
               AppState.isServiceRunning = it 
               if (it) {
                   val intent = Intent(context, OverlayService::class.java)
@@ -692,7 +752,7 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
                           .clip(CircleShape)
                           .background(color)
                           .border(2.dp, if (AppState.settings.triggerColor == color) GhostWhite else Color.Transparent, CircleShape)
-                          .clickable { AppState.settings = AppState.settings.copy(triggerColor = color, triggerGradientColor = null) }
+                          .clickable { AppState.settings = AppState.settings.copy(triggerColorArgb = color.toArgb(), triggerGradientColorArgb = null) }
                   )
               }
               Box(
@@ -717,7 +777,7 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
                       .clip(CircleShape)
                       .background(Color.Transparent)
                       .border(1.dp, SoftGray, CircleShape)
-                      .clickable { AppState.settings = AppState.settings.copy(triggerGradientColor = null) },
+                      .clickable { AppState.settings = AppState.settings.copy(triggerGradientColorArgb = null) },
                   contentAlignment = Alignment.Center
               ) {
                   Icon(Icons.Rounded.Close, null, tint = SoftGray, modifier = Modifier.size(16.dp))
@@ -730,7 +790,7 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
                           .clip(CircleShape)
                           .background(color)
                           .border(2.dp, if (AppState.settings.triggerGradientColor == color) GhostWhite else Color.Transparent, CircleShape)
-                          .clickable { AppState.settings = AppState.settings.copy(triggerGradientColor = color) }
+                          .clickable { AppState.settings = AppState.settings.copy(triggerGradientColorArgb = color.toArgb()) }
                   )
               }
           }
@@ -805,7 +865,7 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = { 
-                    AppState.settings = AppState.settings.copy(triggerColor = Color(r, g, b), triggerGradientColor = null)
+                    AppState.settings = AppState.settings.copy(triggerColorArgb = Color(r, g, b).toArgb(), triggerGradientColorArgb = null)
                     showColorPicker = false 
                 }) { Text("Save", color = ElectricBlue) }
             },
@@ -838,12 +898,32 @@ fun LegalMenuItem(title: String, onClick: () -> Unit) {
 fun TriggerComponent() {
     val haptics = LocalHapticFeedback.current
     var isDragging by remember { mutableStateOf(false) }
+    var isNotifying by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val context = LocalContext.current
     
-    val animatedWidth by animateFloatAsState(targetValue = if (isDragging) AppState.settings.triggerThickness * 1.5f else AppState.settings.triggerThickness)
-    val animatedHeight by animateFloatAsState(targetValue = if (isDragging) AppState.settings.triggerHeight * 1.1f else AppState.settings.triggerHeight)
-    val animatedAlpha by animateFloatAsState(targetValue = if (isDragging) 1f else 0.7f)
+    LaunchedEffect(AppState.notificationTrigger) {
+        if (AppState.notificationTrigger > 0) {
+            isNotifying = true
+            kotlinx.coroutines.delay(150)
+            isNotifying = false
+            kotlinx.coroutines.delay(150)
+            isNotifying = true
+            kotlinx.coroutines.delay(150)
+            isNotifying = false
+        }
+    }
+    
+    val animatedWidth by animateFloatAsState(
+        targetValue = if (isNotifying) AppState.settings.triggerThickness * 2.5f else if (isDragging) AppState.settings.triggerThickness * 1.5f else AppState.settings.triggerThickness
+    )
+    val animatedHeight by animateFloatAsState(
+        targetValue = if (isNotifying) AppState.settings.triggerHeight * 1.2f else if (isDragging) AppState.settings.triggerHeight * 1.1f else AppState.settings.triggerHeight
+    )
+    val animatedAlpha by animateFloatAsState(
+        targetValue = if (isNotifying) 1f else if (isDragging) 1f else 0.7f
+    )
+    val notifyGlowAlpha by animateFloatAsState(targetValue = if (isNotifying) 0.6f else 0f)
 
     Box(
         modifier = Modifier
@@ -858,6 +938,12 @@ fun TriggerComponent() {
             else 
                 androidx.compose.ui.graphics.SolidColor(AppState.settings.triggerColor.copy(alpha = animatedAlpha))
         )
+        .drawWithContent {
+            drawContent()
+            if (notifyGlowAlpha > 0f) {
+                drawRect(color = Color.White.copy(alpha = notifyGlowAlpha))
+            }
+        }
         .pointerInput(AppState.settings.triggerAction) {
             detectTapGestures(
                 onPress = { 
@@ -894,24 +980,13 @@ fun TriggerComponent() {
                     val dx = if (AppState.settings.isRightEdge) -with(density) { dragAmount.x.toDp().value } else with(density) { dragAmount.x.toDp().value }
                     val dy = with(density) { dragAmount.y.toDp().value }
                     
-                    if (AppState.settings.triggerAction == 0 && dx > 5 && !AppState.sidebarVisible) {
+                    if (AppState.settings.triggerAction == 0 && dx > 5 && kotlin.math.abs(dx) > kotlin.math.abs(dy) && !AppState.sidebarVisible) {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         AppState.sidebarVisible = true
                     } else {
-                        // Allow dragging left to right side and vice versa
-                        val screenWidthDp = context.resources.displayMetrics.widthPixels / context.resources.displayMetrics.density
                         AppState.settings = AppState.settings.copy(
-                            triggerOffsetY = (AppState.settings.triggerOffsetY + dy).coerceIn(-400f, 400f),
-                            triggerOffsetX = (AppState.settings.triggerOffsetX - dx).coerceIn(0f, screenWidthDp)
+                            triggerOffsetY = (AppState.settings.triggerOffsetY + dy).coerceIn(-400f, 400f)
                         )
-                        
-                        if (AppState.settings.triggerOffsetX > screenWidthDp / 2) {
-                            AppState.settings = AppState.settings.copy(
-                                isRightEdge = !AppState.settings.isRightEdge,
-                                triggerOffsetX = 0f
-                            )
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        }
                     }
                 }
             }
@@ -1055,46 +1130,71 @@ fun SidebarComponent(onAppClick: (AppInfo, Boolean) -> Unit, onToggleHud: () -> 
             Spacer(modifier = Modifier.height(24.dp))
             Text("Quick Actions", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Spacer(modifier = Modifier.height(16.dp))
+            var isFlashlightOn by remember { mutableStateOf(false) }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.clickable { 
-                        android.widget.Toast.makeText(context, "Screenshot taken", android.widget.Toast.LENGTH_SHORT).show() 
+                        try {
+                            val intent = Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Cannot open Camera", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                         AppState.sidebarVisible = false
                     }
                 ) {
                     Icon(Icons.Rounded.Camera, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("Screenshot", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Text("Camera", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.clickable { 
-                        android.widget.Toast.makeText(context, "Screen recording started", android.widget.Toast.LENGTH_SHORT).show() 
-                        AppState.sidebarVisible = false
+                        try {
+                            val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                            val cameraId = cameraManager.cameraIdList[0]
+                            isFlashlightOn = !isFlashlightOn
+                            cameraManager.setTorchMode(cameraId, isFlashlightOn)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Cannot toggle flashlight", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     }
                 ) {
-                    Icon(Icons.Rounded.Videocam, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("Record", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Icon(Icons.Rounded.FlashlightOn, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = if (isFlashlightOn) Color(0xFFFFC107) else GhostWhite)
+                    Text("Flashlight", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.clickable { 
-                        android.widget.Toast.makeText(context, "QR Scanner opened", android.widget.Toast.LENGTH_SHORT).show() 
+                        try {
+                            val intent = Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Cannot open Alarms", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                         AppState.sidebarVisible = false
                     }
                 ) {
-                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("QR Scan", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Icon(Icons.Rounded.Alarm, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
+                    Text("Alarms", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.clickable { 
-                        android.widget.Toast.makeText(context, "Turning off screen...", android.widget.Toast.LENGTH_SHORT).show() 
+                        try {
+                            val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Cannot open Settings", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                         AppState.sidebarVisible = false
                     }
                 ) {
-                    Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("Screen Off", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Icon(Icons.Rounded.Settings, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
+                    Text("Settings", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -1699,36 +1799,72 @@ fun FloatingWindowComponent(
                 if(isScanning) CircularProgressIndicator(color=Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Start Scan", color = Color.White) 
             }
         } else if (windowData.title == "Universal Clipboard") {
-            var clipboardItems by remember { mutableStateOf<List<String>>(emptyList()) }
+            var newItemText by remember { mutableStateOf("") }
+            val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            
             LaunchedEffect(Unit) {
-                val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 if (clipboardManager.hasPrimaryClip()) {
                     val clip = clipboardManager.primaryClip
                     if (clip != null && clip.itemCount > 0) {
                         val text = clip.getItemAt(0).text?.toString() ?: ""
-                        if (text.isNotEmpty()) clipboardItems = listOf(text)
-                    }
-                }
-            }
-            Text("Clipboard History", color = GhostWhite, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (clipboardItems.isEmpty()) {
-                    item { Text("No items copied yet", color = SoftGray, fontSize = 12.sp) }
-                } else {
-                    items(clipboardItems.size) { index ->
-                        Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceDark).padding(12.dp)) {
-                            Text(clipboardItems[index], color = SoftGray, fontSize = 12.sp)
+                        if (text.isNotEmpty() && !AppState.clipboardHistory.contains(text)) {
+                            AppState.clipboardHistory.add(0, text)
                         }
                     }
                 }
             }
+            Text("Clipboard History", color = GhostWhite, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = newItemText,
+                onValueChange = { newItemText = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Add new clip...", color = SoftGray) },
+                textStyle = androidx.compose.ui.text.TextStyle(color = GhostWhite),
+                trailingIcon = {
+                    IconButton(onClick = {
+                        if (newItemText.isNotBlank()) {
+                            AppState.clipboardHistory.add(0, newItemText)
+                            clipboardManager.setPrimaryClip(android.content.ClipData.newPlainText("text", newItemText))
+                            newItemText = ""
+                            AppState.saveSettings(context)
+                        }
+                    }) { Icon(Icons.Rounded.Add, "Add", tint = NeonPurple) }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NeonPurple,
+                    unfocusedBorderColor = SoftGray
+                )
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (AppState.clipboardHistory.isEmpty()) {
+                    item { Text("No items copied yet", color = SoftGray, fontSize = 12.sp) }
+                } else {
+                    items(AppState.clipboardHistory.size) { index ->
+                        val clipText = AppState.clipboardHistory[index]
+                        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceDark).padding(12.dp).clickable {
+                            clipboardManager.setPrimaryClip(android.content.ClipData.newPlainText("text", clipText))
+                            android.widget.Toast.makeText(context, "Copied!", android.widget.Toast.LENGTH_SHORT).show()
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Text(clipText, color = SoftGray, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { 
+                                AppState.clipboardHistory.removeAt(index) 
+                                AppState.saveSettings(context)
+                            }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Rounded.Delete, "Delete", tint = Color.Red.copy(alpha=0.7f))
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Button(onClick = { 
-                clipboardItems = emptyList()
-                val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                AppState.clipboardHistory.clear()
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                     clipboardManager.clearPrimaryClip()
                 }
+                AppState.saveSettings(context)
                 android.widget.Toast.makeText(context, "Clipboard cleared", android.widget.Toast.LENGTH_SHORT).show() 
             }, colors = ButtonDefaults.buttonColors(containerColor = NeonPurple)) { Text("Clear All", color = Color.White) }
         } else if (windowData.title == "Macro & Auto-Clicker") {
