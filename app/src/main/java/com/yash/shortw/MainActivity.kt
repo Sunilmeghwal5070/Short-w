@@ -113,6 +113,7 @@ object AppState {
   var isServiceRunning by mutableStateOf(false)
   var hasOverlayPermission by mutableStateOf(false)
   var hasNotificationPermission by mutableStateOf(false)
+  var hasAccessibilityPermission by mutableStateOf(false)
   var hasNotificationListenerPermission by mutableStateOf(false)
   var notificationTrigger by mutableStateOf(0)
   var hasWriteSettingsPermission by mutableStateOf(false)
@@ -246,6 +247,25 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     AppState.hasOverlayPermission = Settings.canDrawOverlays(this)
+    
+    // Check Accessibility Permission
+    val expectedComponentName = android.content.ComponentName(this, OverlayAccessibilityService::class.java)
+    val enabledServicesSetting = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+    var isAccessibilityEnabled = false
+    if (enabledServicesSetting != null) {
+        val colonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
+        colonSplitter.setString(enabledServicesSetting)
+        while (colonSplitter.hasNext()) {
+            val componentNameString = colonSplitter.next()
+            val enabledService = android.content.ComponentName.unflattenFromString(componentNameString)
+            if (enabledService != null && enabledService == expectedComponentName) {
+                isAccessibilityEnabled = true
+                break
+            }
+        }
+    }
+    AppState.hasAccessibilityPermission = isAccessibilityEnabled
+
     AppState.hasWriteSettingsPermission = Settings.System.canWrite(this)
     AppState.hasNotificationPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
         androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -279,7 +299,7 @@ fun ApexPanelApp(prefs: android.content.SharedPreferences) {
   val context = LocalContext.current
   var currentRoute by remember { mutableStateOf(if (AppState.isFirstLaunch) "onboarding" else "main") }
 
-  val allPermissionsGranted = AppState.hasOverlayPermission && AppState.hasWriteSettingsPermission && AppState.hasNotificationPermission
+  val allPermissionsGranted = (AppState.hasOverlayPermission || AppState.hasAccessibilityPermission) && AppState.hasWriteSettingsPermission && AppState.hasNotificationPermission
 
   if (AppState.isFirstLaunch && currentRoute == "onboarding") {
       OnboardingScreen(
@@ -502,6 +522,22 @@ fun PermissionScreen() {
                     }
                 )
                 
+                if (!AppState.hasOverlayPermission) {
+                    PermissionItem(
+                        title = "Alternative: Accessibility Service",
+                        description = "If 'Display Over Other Apps' is missing, enable ApexPanel Pro in Accessibility Services.",
+                        isGranted = AppState.hasAccessibilityPermission,
+                        onClick = {
+                            try {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Cannot open Accessibility Settings", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                }
+                
                 PermissionItem(
                     title = "Modify System Settings",
                     description = "Required for brightness control",
@@ -608,20 +644,26 @@ fun SettingsDashboard(onNavigate: (String) -> Unit) {
         Switch(
           checked = AppState.isServiceRunning,
           onCheckedChange = { 
-              if (it && !AppState.hasOverlayPermission) {
-                  Toast.makeText(context, "Overlay permission is required", Toast.LENGTH_SHORT).show()
+              if (it && !AppState.hasOverlayPermission && !AppState.hasAccessibilityPermission) {
+                  Toast.makeText(context, "Overlay or Accessibility permission is required", Toast.LENGTH_SHORT).show()
                   return@Switch
               }
               AppState.isServiceRunning = it 
               if (it) {
-                  val intent = Intent(context, OverlayService::class.java)
-                  if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                      context.startForegroundService(intent)
-                  } else {
-                      context.startService(intent)
+                  if (AppState.hasOverlayPermission) {
+                      val intent = Intent(context, OverlayService::class.java)
+                      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                          context.startForegroundService(intent)
+                      } else {
+                          context.startService(intent)
+                      }
+                  } else if (AppState.hasAccessibilityPermission) {
+                      Toast.makeText(context, "Using Accessibility Service Mode", Toast.LENGTH_SHORT).show()
                   }
               } else {
-                  context.stopService(Intent(context, OverlayService::class.java))
+                  if (AppState.hasOverlayPermission) {
+                      context.stopService(Intent(context, OverlayService::class.java))
+                  }
               }
           },
           colors = SwitchDefaults.colors(checkedThumbColor = ElectricBlue, checkedTrackColor = ElectricBlue.copy(alpha = 0.3f))
