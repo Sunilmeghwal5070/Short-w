@@ -153,7 +153,13 @@ class OverlayService : Service() {
             y = dpToPx(AppState.settings.triggerOffsetY)
         }
         if (android.provider.Settings.canDrawOverlays(this)) {
-            windowManager.addView(triggerView, params)
+            try {
+                windowManager.addView(triggerView, params)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                stopSelf()
+                return
+            }
         } else {
             stopSelf()
             return
@@ -232,7 +238,11 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         )
         if (android.provider.Settings.canDrawOverlays(this)) {
-            windowManager.addView(sidebarView, params)
+            try {
+                windowManager.addView(sidebarView, params)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
         triggerView?.visibility = View.GONE
     }
@@ -265,7 +275,11 @@ class OverlayService : Service() {
             y = 100
         }
         if (android.provider.Settings.canDrawOverlays(this)) {
-            windowManager.addView(hudView, params)
+            try {
+                windowManager.addView(hudView, params)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -335,7 +349,11 @@ class OverlayService : Service() {
                 y = windowData.offset.y
             }
             if (android.provider.Settings.canDrawOverlays(this)) {
-                windowManager.addView(view, params)
+                try {
+                    windowManager.addView(view, params)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
             windowViews[id] = view
         }
