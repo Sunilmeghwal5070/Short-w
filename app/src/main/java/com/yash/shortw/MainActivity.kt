@@ -92,6 +92,13 @@ data class AppInfo(
   val packageName: String
 )
 
+data class UpdateInfo(
+  val versionCode: Int,
+  val versionName: String,
+  val updateUrl: String,
+  val changeLog: String
+)
+
 data class FloatingWindowData(
   val id: Int,
   val title: String,
@@ -128,6 +135,52 @@ object AppState {
   var visibleControls = mutableStateListOf<String>("Wi-Fi", "Bluetooth", "Data", "Ghost Mode", "Brightness", "Volume")
   var clipboardHistory = mutableStateListOf<String>()
   var windowIdCounter = 0
+  
+  var updateInfo by mutableStateOf<UpdateInfo?>(null)
+  var isCheckingForUpdate by mutableStateOf(false)
+  
+  fun checkForUpdates(context: android.content.Context) {
+      if (isCheckingForUpdate) return
+      isCheckingForUpdate = true
+      
+      val currentVersionCode = try {
+          context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+      } catch (e: Exception) { 1 }
+      
+      // Note: In a real app, host this JSON on a server or GitHub
+      val updateCheckUrl = "https://raw.githubusercontent.com/yash-apex/shortw-updates/main/update.json"
+      
+      Thread {
+          try {
+              val url = java.net.URL(updateCheckUrl)
+              val connection = url.openConnection() as java.net.HttpURLConnection
+              connection.requestMethod = "GET"
+              connection.connectTimeout = 5000
+              connection.readTimeout = 5000
+              
+              if (connection.responseCode == 200) {
+                  val reader = java.io.BufferedReader(java.io.InputStreamReader(connection.inputStream))
+                  val response = StringBuilder()
+                  var line: String?
+                  while (reader.readLine().also { line = it } != null) {
+                      response.append(line)
+                  }
+                  reader.close()
+                  
+                  val gson = com.google.gson.Gson()
+                  val info = gson.fromJson(response.toString(), UpdateInfo::class.java)
+                  
+                  if (info.versionCode > currentVersionCode) {
+                      updateInfo = info
+                  }
+              }
+          } catch (e: Exception) {
+              e.printStackTrace()
+          } finally {
+              isCheckingForUpdate = false
+          }
+      }.start()
+  }
   
   fun saveSettings(context: android.content.Context) {
       val prefs = context.getSharedPreferences("ApexPanelPrefs", android.content.Context.MODE_PRIVATE)
@@ -299,6 +352,17 @@ fun ApexPanelApp(prefs: android.content.SharedPreferences) {
   val context = LocalContext.current
   var currentRoute by remember { mutableStateOf(if (AppState.isFirstLaunch) "onboarding" else "main") }
 
+  LaunchedEffect(Unit) {
+      AppState.checkForUpdates(context)
+  }
+
+  AppState.updateInfo?.let { info ->
+      UpdateDialog(
+          info = info,
+          onDismiss = { AppState.updateInfo = null }
+      )
+  }
+
   val allPermissionsGranted = (AppState.hasOverlayPermission || AppState.hasAccessibilityPermission) && AppState.hasWriteSettingsPermission && AppState.hasNotificationPermission
 
   if (AppState.isFirstLaunch && currentRoute == "onboarding") {
@@ -337,7 +401,43 @@ fun ApexPanelApp(prefs: android.content.SharedPreferences) {
 }
 
 @Composable
+fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New Update Available!", color = GhostWhite, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Version: ${info.versionName}", color = GhostWhite.copy(alpha = 0.7f), fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(info.changeLog, color = GhostWhite)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.updateUrl))
+                    context.startActivity(intent)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
+            ) {
+                Text("Update Now", color = GhostWhite)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Later", color = GhostWhite.copy(alpha = 0.6f))
+            }
+        },
+        containerColor = SurfaceDark,
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+@Composable
 fun LegalScreen(title: String, onBack: () -> Unit) {
+    val context = LocalContext.current
     Scaffold(
         topBar = {
             @OptIn(ExperimentalMaterial3Api::class)
@@ -352,14 +452,37 @@ fun LegalScreen(title: String, onBack: () -> Unit) {
         containerColor = Obsidian
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
-            val text = when (title) {
-                "Privacy Policy" -> "Privacy Policy\n\n1. Information Collection: We do not collect or store any personal data. All app preferences and configurations are stored locally on your device.\n2. Permissions: The 'Display Over Other Apps' permission is required strictly for providing the floating overlay functionality. We do not track your usage of other apps.\n3. Third-party Services: We do not use any third-party tracking or analytics services."
-                "Terms & Conditions" -> "Terms & Conditions\n\n1. Acceptance: By using ApexPanel Pro, you agree to these terms.\n2. Usage: You agree to use the app responsibly and not for any malicious purposes.\n3. Modification: We reserve the right to modify these terms at any time.\n4. Liability: We are not responsible for any damage to your device caused by improper use of the application."
-                "Disclaimer" -> "Disclaimer\n\nThe automation and system modification tools provided in this app (such as brightness and volume controls) interact with Android system settings. While we strive for stability, we are not liable for any unintended system behavior or data loss resulting from the use of these tools."
-                "About" -> "About ApexPanel Pro\n\nVersion: 1.0.0\n\nApexPanel Pro is a comprehensive floating overlay toolkit designed to boost your productivity. It provides quick access to your favorite apps, system toggles, and utilities directly from any screen without interrupting your workflow.\n\nDeveloped by Sunil Meghwal"
-                else -> "Content for $title"
+            if (title == "About") {
+                Text("About ApexPanel Pro", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                val currentVersion = try {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                } catch (e: Exception) { "1.0.0" }
+                Text("Version: $currentVersion", color = SoftGray)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("ApexPanel Pro is a comprehensive floating overlay toolkit designed to boost your productivity. It provides quick access to your favorite apps, system toggles, and utilities directly from any screen without interrupting your workflow.\n\nDeveloped by Sunil Meghwal", color = SoftGray, lineHeight = 20.sp)
+                Spacer(modifier = Modifier.height(32.dp))
+                Button(
+                    onClick = { AppState.checkForUpdates(context) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (AppState.isCheckingForUpdate) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = ElectricBlue, strokeWidth = 2.dp)
+                    } else {
+                        Text("Check for Update", color = GhostWhite)
+                    }
+                }
+            } else {
+                val text = when (title) {
+                    "Privacy Policy" -> "Privacy Policy\n\n1. Information Collection: We do not collect or store any personal data. All app preferences and configurations are stored locally on your device.\n2. Permissions: The 'Display Over Other Apps' permission is required strictly for providing the floating overlay functionality. We do not track your usage of other apps.\n3. Third-party Services: We do not use any third-party tracking or analytics services."
+                    "Terms & Conditions" -> "Terms & Conditions\n\n1. Acceptance: By using ApexPanel Pro, you agree to these terms.\n2. Usage: You agree to use the app responsibly and not for any malicious purposes.\n3. Modification: We reserve the right to modify these terms at any time.\n4. Liability: We are not responsible for any damage to your device caused by improper use of the application."
+                    "Disclaimer" -> "Disclaimer\n\nThe automation and system modification tools provided in this app (such as brightness and volume controls) interact with Android system settings. While we strive for stability, we are not liable for any unintended system behavior or data loss resulting from the use of these tools."
+                    else -> "Content for $title"
+                }
+                Text(text, color = SoftGray, lineHeight = 20.sp)
             }
-            Text(text, color = SoftGray, lineHeight = 20.sp)
         }
     }
 }
@@ -536,6 +659,27 @@ fun PermissionScreen() {
                             }
                         }
                     )
+                    
+                    if (!AppState.hasAccessibilityPermission) {
+                        Text(
+                            text = "Note: If you see 'Restricted Setting', go to App Info -> Top Right 3 Dots -> 'Allow restricted settings'.",
+                            color = Color.Yellow,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.fromParts("package", context.packageName, null)
+                                }
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                            modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth()
+                        ) {
+                            Text("Open App Info", color = GhostWhite)
+                        }
+                    }
                 }
                 
                 PermissionItem(
