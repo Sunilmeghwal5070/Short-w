@@ -63,6 +63,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.yash.shortw.ui.theme.*
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -75,12 +78,14 @@ data class AppSettings(
   val triggerOffsetX: Float = 0f,
   val triggerOffsetY: Float = 0f,
   val isRightEdge: Boolean = true,
+  val edgePosition: Int = 2,
   val sidebarOpacity: Float = 0.85f,
   val windowOpacity: Float = 0.95f,
   val triggerAction: Int = 0, // 0 = Swipe, 1 = Single Tap, 2 = Double Tap
   val triggerColorArgb: Int = 0xFF1976D2.toInt(), // ElectricBlue
   val triggerGradientColorArgb: Int? = null,
-  val triggerMode: Int = 0 // 0 = Visual Slider, 1 = Full Screen Edge
+  val triggerMode: Int = 0, // 0 = Visual Slider, 1 = Full Screen Edge
+  val sidebarDesign: Int = 0 // 0 = Sci-Fi Gamer, 1 = Minimal Sleek
 ) {
   val triggerColor: Color get() = Color(triggerColorArgb)
   val triggerGradientColor: Color? get() = triggerGradientColorArgb?.let { Color(it) }
@@ -90,13 +95,6 @@ data class AppInfo(
   val name: String,
   val icon: ImageBitmap,
   val packageName: String
-)
-
-data class UpdateInfo(
-  val versionCode: Int,
-  val versionName: String,
-  val updateUrl: String,
-  val changeLog: String
 )
 
 data class FloatingWindowData(
@@ -127,6 +125,8 @@ object AppState {
   var settings by mutableStateOf(AppSettings())
   var sidebarVisible by mutableStateOf(false)
   var hudVisible by mutableStateOf(false)
+    var lastTriggeredSide by mutableStateOf(1)
+    var isDraggingBubble by mutableStateOf(false)
   val windows = mutableStateListOf<FloatingWindowData>()
   var installedApps by mutableStateOf<List<AppInfo>>(emptyList())
   var pinnedApps = mutableStateListOf<String>() // Package names
@@ -136,54 +136,8 @@ object AppState {
   var clipboardHistory = mutableStateListOf<String>()
   var windowIdCounter = 0
   
-  var updateInfo by mutableStateOf<UpdateInfo?>(null)
-  var isCheckingForUpdate by mutableStateOf(false)
-  
-  fun checkForUpdates(context: android.content.Context) {
-      if (isCheckingForUpdate) return
-      isCheckingForUpdate = true
-      
-      val currentVersionCode = try {
-          context.packageManager.getPackageInfo(context.packageName, 0).versionCode
-      } catch (e: Exception) { 1 }
-      
-      // Note: In a real app, host this JSON on a server or GitHub
-      val updateCheckUrl = "https://raw.githubusercontent.com/yash-apex/shortw-updates/main/update.json"
-      
-      Thread {
-          try {
-              val url = java.net.URL(updateCheckUrl)
-              val connection = url.openConnection() as java.net.HttpURLConnection
-              connection.requestMethod = "GET"
-              connection.connectTimeout = 5000
-              connection.readTimeout = 5000
-              
-              if (connection.responseCode == 200) {
-                  val reader = java.io.BufferedReader(java.io.InputStreamReader(connection.inputStream))
-                  val response = StringBuilder()
-                  var line: String?
-                  while (reader.readLine().also { line = it } != null) {
-                      response.append(line)
-                  }
-                  reader.close()
-                  
-                  val gson = com.google.gson.Gson()
-                  val info = gson.fromJson(response.toString(), UpdateInfo::class.java)
-                  
-                  if (info.versionCode > currentVersionCode) {
-                      updateInfo = info
-                  }
-              }
-          } catch (e: Exception) {
-              e.printStackTrace()
-          } finally {
-              isCheckingForUpdate = false
-          }
-      }.start()
-  }
-  
   fun saveSettings(context: android.content.Context) {
-      val prefs = context.getSharedPreferences("ApexPanelPrefs", android.content.Context.MODE_PRIVATE)
+      val prefs = context.getSharedPreferences("Short PanelPrefs", android.content.Context.MODE_PRIVATE)
       val gson = com.google.gson.Gson()
       prefs.edit().apply {
           putString("settings", gson.toJson(settings))
@@ -196,7 +150,7 @@ object AppState {
   }
   
   fun loadSettings(context: android.content.Context) {
-      val prefs = context.getSharedPreferences("ApexPanelPrefs", android.content.Context.MODE_PRIVATE)
+      val prefs = context.getSharedPreferences("Short PanelPrefs", android.content.Context.MODE_PRIVATE)
       val gson = com.google.gson.Gson()
       try {
           prefs.getString("settings", null)?.let { settings = gson.fromJson(it, AppSettings::class.java) }
@@ -332,7 +286,7 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     
-    val prefs = getSharedPreferences("ApexPanelPrefs", android.content.Context.MODE_PRIVATE)
+    val prefs = getSharedPreferences("Short PanelPrefs", android.content.Context.MODE_PRIVATE)
     AppState.isFirstLaunch = prefs.getBoolean("isFirstLaunch", true)
     AppState.language = prefs.getString("language", "en") ?: "en"
     
@@ -341,31 +295,24 @@ class MainActivity : ComponentActivity() {
 
     setContent {
       MyApplicationTheme {
-        ApexPanelApp(prefs)
+        ShortPanelApp(prefs)
       }
     }
   }
 }
 
 @Composable
-fun ApexPanelApp(prefs: android.content.SharedPreferences) {
+fun ShortPanelApp(prefs: android.content.SharedPreferences) {
   val context = LocalContext.current
-  var currentRoute by remember { mutableStateOf(if (AppState.isFirstLaunch) "onboarding" else "main") }
-
-  LaunchedEffect(Unit) {
-      AppState.checkForUpdates(context)
-  }
-
-  AppState.updateInfo?.let { info ->
-      UpdateDialog(
-          info = info,
-          onDismiss = { AppState.updateInfo = null }
-      )
-  }
+  var currentRoute by remember { mutableStateOf("splash") }
 
   val allPermissionsGranted = (AppState.hasOverlayPermission || AppState.hasAccessibilityPermission) && AppState.hasWriteSettingsPermission && AppState.hasNotificationPermission
 
-  if (AppState.isFirstLaunch && currentRoute == "onboarding") {
+  if (currentRoute == "splash") {
+      SplashScreen {
+          currentRoute = if (AppState.isFirstLaunch) "onboarding" else "main"
+      }
+  } else if (AppState.isFirstLaunch && currentRoute == "onboarding") {
       OnboardingScreen(
           onComplete = {
               prefs.edit().putBoolean("isFirstLaunch", false).putString("language", AppState.language).apply()
@@ -401,38 +348,56 @@ fun ApexPanelApp(prefs: android.content.SharedPreferences) {
 }
 
 @Composable
-fun UpdateDialog(info: UpdateInfo, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New Update Available!", color = GhostWhite, fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                Text("Version: ${info.versionName}", color = GhostWhite.copy(alpha = 0.7f), fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(info.changeLog, color = GhostWhite)
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.updateUrl))
-                    context.startActivity(intent)
-                    onDismiss()
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
-            ) {
-                Text("Update Now", color = GhostWhite)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Later", color = GhostWhite.copy(alpha = 0.6f))
-            }
-        },
-        containerColor = SurfaceDark,
-        shape = RoundedCornerShape(24.dp)
-    )
+fun SplashScreen(onFinish: () -> Unit) {
+    val scale = remember { androidx.compose.animation.core.Animatable(0.5f) }
+    val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
+
+    LaunchedEffect(Unit) {
+        launch {
+            scale.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessLow
+                )
+            )
+        }
+        launch {
+            alpha.animateTo(1f, animationSpec = androidx.compose.animation.core.tween(1000))
+        }
+        delay(2000)
+        onFinish()
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Obsidian),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_app_logo),
+                contentDescription = "Logo",
+                modifier = Modifier
+                    .size(120.dp)
+                    .graphicsLayer(scaleX = scale.value, scaleY = scale.value, alpha = alpha.value)
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = "Short Panel Pro",
+                color = GhostWhite,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.graphicsLayer(alpha = alpha.value)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Ultimate Floating Workspace",
+                color = SoftGray,
+                fontSize = 14.sp,
+                modifier = Modifier.graphicsLayer(alpha = alpha.value)
+            )
+        }
+    }
 }
 
 @Composable
@@ -453,31 +418,26 @@ fun LegalScreen(title: String, onBack: () -> Unit) {
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
             if (title == "About") {
-                Text("About ApexPanel Pro", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_app_logo),
+                        contentDescription = "Logo",
+                        modifier = Modifier.size(80.dp).clip(RoundedCornerShape(16.dp)).background(SurfaceDark).padding(16.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+                Text("About Short Panel Pro", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 Spacer(modifier = Modifier.height(8.dp))
                 val currentVersion = try {
                     context.packageManager.getPackageInfo(context.packageName, 0).versionName
                 } catch (e: Exception) { "1.0.0" }
                 Text("Version: $currentVersion", color = SoftGray)
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("ApexPanel Pro is a comprehensive floating overlay toolkit designed to boost your productivity. It provides quick access to your favorite apps, system toggles, and utilities directly from any screen without interrupting your workflow.\n\nDeveloped by Sunil Meghwal", color = SoftGray, lineHeight = 20.sp)
-                Spacer(modifier = Modifier.height(32.dp))
-                Button(
-                    onClick = { AppState.checkForUpdates(context) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    if (AppState.isCheckingForUpdate) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = ElectricBlue, strokeWidth = 2.dp)
-                    } else {
-                        Text("Check for Update", color = GhostWhite)
-                    }
-                }
+                Text("Short Panel Pro is a comprehensive floating overlay toolkit designed to boost your productivity. It provides quick access to your favorite apps, system toggles, and utilities directly from any screen without interrupting your workflow.\n\nDeveloped by Sunil Meghwal", color = SoftGray, lineHeight = 20.sp)
             } else {
                 val text = when (title) {
                     "Privacy Policy" -> "Privacy Policy\n\n1. Information Collection: We do not collect or store any personal data. All app preferences and configurations are stored locally on your device.\n2. Permissions: The 'Display Over Other Apps' permission is required strictly for providing the floating overlay functionality. We do not track your usage of other apps.\n3. Third-party Services: We do not use any third-party tracking or analytics services."
-                    "Terms & Conditions" -> "Terms & Conditions\n\n1. Acceptance: By using ApexPanel Pro, you agree to these terms.\n2. Usage: You agree to use the app responsibly and not for any malicious purposes.\n3. Modification: We reserve the right to modify these terms at any time.\n4. Liability: We are not responsible for any damage to your device caused by improper use of the application."
+                    "Terms & Conditions" -> "Terms & Conditions\n\n1. Acceptance: By using Short Panel Pro, you agree to these terms.\n2. Usage: You agree to use the app responsibly and not for any malicious purposes.\n3. Modification: We reserve the right to modify these terms at any time.\n4. Liability: We are not responsible for any damage to your device caused by improper use of the application."
                     "Disclaimer" -> "Disclaimer\n\nThe automation and system modification tools provided in this app (such as brightness and volume controls) interact with Android system settings. While we strive for stability, we are not liable for any unintended system behavior or data loss resulting from the use of these tools."
                     else -> "Content for $title"
                 }
@@ -489,6 +449,7 @@ fun LegalScreen(title: String, onBack: () -> Unit) {
 
 @Composable
 fun AppSelectionScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) }
     
     Scaffold(
@@ -526,10 +487,12 @@ fun AppSelectionScreen(onBack: () -> Unit) {
                                 .clickable {
                                     if (isSelected) {
                                         currentList.remove(app.packageName)
+                                        AppState.saveSettings(context)
                                     } else if (currentList.size < limit) {
                                         currentList.add(app.packageName)
+                                        AppState.saveSettings(context)
                                     } else {
-                                        // Show toast or something
+                                        android.widget.Toast.makeText(context, "Limit reached", android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                 }
                         ) {
@@ -577,9 +540,11 @@ fun ItemSelectionScreen(title: String, allItems: List<String>, selectedItems: an
                         .clickable {
                             if (isSelected) {
                                 selectedItems.remove(item)
+                                AppState.saveSettings(context)
                             } else {
                                 if (selectedItems.size < maxSelection) {
                                     selectedItems.add(item)
+                                    AppState.saveSettings(context)
                                 } else {
                                     android.widget.Toast.makeText(context, "Maximum limit reached", android.widget.Toast.LENGTH_SHORT).show()
                                 }
@@ -627,7 +592,7 @@ fun PermissionScreen() {
             Spacer(Modifier.height(16.dp))
             Text("Required Permissions", color = GhostWhite, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text("ApexPanel Pro requires the following permissions to function fully.", color = SoftGray, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text("Short Panel Pro requires the following permissions to function fully.", color = SoftGray, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Spacer(Modifier.height(32.dp))
             
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -648,7 +613,7 @@ fun PermissionScreen() {
                 if (!AppState.hasOverlayPermission) {
                     PermissionItem(
                         title = "Alternative: Accessibility Service",
-                        description = "If 'Display Over Other Apps' is missing, enable ApexPanel Pro in Accessibility Services.",
+                        description = "If 'Display Over Other Apps' is missing, enable Short Panel Pro in Accessibility Services.",
                         isGranted = AppState.hasAccessibilityPermission,
                         onClick = {
                             try {
@@ -750,345 +715,6 @@ fun PermissionItem(title: String, description: String, isGranted: Boolean, onCli
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsDashboard(onNavigate: (String) -> Unit) {
-  val context = LocalContext.current
-  var showColorPicker by remember { mutableStateOf(false) }
-  
-  Scaffold(
-    topBar = {
-      TopAppBar(
-        title = { Text("ApexPanel Pro Settings", color = GhostWhite, fontWeight = FontWeight.Bold) },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-      )
-    },
-    containerColor = Color.Transparent
-  ) { padding ->
-    Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Obsidian, SurfaceDark)))) {
-      Column(
-        modifier = Modifier
-          .fillMaxSize()
-          .padding(padding)
-          .verticalScroll(rememberScrollState())
-          .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
-      ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .clip(RoundedCornerShape(16.dp))
-          .background(SurfaceDark)
-          .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-      ) {
-        Column {
-          Text("Master Service", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-          Text(if (AppState.isServiceRunning) "Running" else "Stopped", color = if (AppState.isServiceRunning) ElectricBlue else SoftGray)
-        }
-        Switch(
-          checked = AppState.isServiceRunning,
-          onCheckedChange = { 
-              if (it && !AppState.hasOverlayPermission && !AppState.hasAccessibilityPermission) {
-                  Toast.makeText(context, "Overlay or Accessibility permission is required", Toast.LENGTH_SHORT).show()
-                  return@Switch
-              }
-              AppState.isServiceRunning = it 
-              if (it) {
-                  if (AppState.hasOverlayPermission) {
-                      val intent = Intent(context, OverlayService::class.java)
-                      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                          context.startForegroundService(intent)
-                      } else {
-                          context.startService(intent)
-                      }
-                  } else if (AppState.hasAccessibilityPermission) {
-                      Toast.makeText(context, "Using Accessibility Service Mode", Toast.LENGTH_SHORT).show()
-                  }
-              } else {
-                  if (AppState.hasOverlayPermission) {
-                      context.stopService(Intent(context, OverlayService::class.java))
-                  }
-              }
-          },
-          colors = SwitchDefaults.colors(checkedThumbColor = ElectricBlue, checkedTrackColor = ElectricBlue.copy(alpha = 0.3f))
-        )
-      }
-
-      Text("App Configuration", color = HyperPink, fontWeight = FontWeight.Bold)
-      Column(
-        modifier = Modifier
-          .clip(RoundedCornerShape(16.dp))
-          .background(SurfaceDark)
-      ) {
-          Row(
-              modifier = Modifier
-                  .fillMaxWidth()
-                  .clickable { onNavigate("app_selection") }
-                  .padding(16.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-              Text("Customize Slider Apps", color = GhostWhite)
-              Icon(Icons.Rounded.ChevronRight, null, tint = SoftGray)
-          }
-          HorizontalDivider(color = Obsidian)
-          Row(
-              modifier = Modifier
-                  .fillMaxWidth()
-                  .clickable { onNavigate("tool_selection") }
-                  .padding(16.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-              Text("Customize Tools", color = GhostWhite)
-              Icon(Icons.Rounded.ChevronRight, null, tint = SoftGray)
-          }
-          HorizontalDivider(color = Obsidian)
-          Row(
-              modifier = Modifier
-                  .fillMaxWidth()
-                  .clickable { onNavigate("control_selection") }
-                  .padding(16.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-              Text("Customize Controls", color = GhostWhite)
-              Icon(Icons.Rounded.ChevronRight, null, tint = SoftGray)
-          }
-      }
-
-      Text("Edge Trigger Customization", color = NeonPurple, fontWeight = FontWeight.Bold)
-      Column(
-        modifier = Modifier
-          .clip(RoundedCornerShape(16.dp))
-          .background(SurfaceDark)
-          .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-      ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-          Text("Position", color = GhostWhite)
-          Row(
-            modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Obsidian)
-          ) {
-            Box(
-              modifier = Modifier
-                .clickable { AppState.settings = AppState.settings.copy(isRightEdge = false) }
-                .background(if (!AppState.settings.isRightEdge) NeonPurple else Color.Transparent)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) { Text("Left", color = GhostWhite) }
-            Box(
-              modifier = Modifier
-                .clickable { AppState.settings = AppState.settings.copy(isRightEdge = true) }
-                .background(if (AppState.settings.isRightEdge) NeonPurple else Color.Transparent)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) { Text("Right", color = GhostWhite) }
-          }
-        }
-        
-        Column {
-          Text("Thickness: ${AppState.settings.triggerThickness.toInt()}dp", color = GhostWhite)
-          Slider(
-            value = AppState.settings.triggerThickness,
-            onValueChange = { AppState.settings = AppState.settings.copy(triggerThickness = it) },
-            valueRange = 2f..20f,
-            colors = SliderDefaults.colors(thumbColor = NeonPurple, activeTrackColor = NeonPurple)
-          )
-        }
-
-        Column {
-          Text("Height: ${AppState.settings.triggerHeight.toInt()}dp", color = GhostWhite)
-          Slider(
-            value = AppState.settings.triggerHeight,
-            onValueChange = { AppState.settings = AppState.settings.copy(triggerHeight = it) },
-            valueRange = 50f..300f,
-            colors = SliderDefaults.colors(thumbColor = NeonPurple, activeTrackColor = NeonPurple)
-          )
-        }
-        
-        Column {
-          Text("Trigger Action", color = GhostWhite)
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Obsidian)
-          ) {
-            val actions = listOf("Swipe", "Single", "Double")
-            actions.forEachIndexed { index, name ->
-              Box(
-                modifier = Modifier
-                  .weight(1f)
-                  .clickable { AppState.settings = AppState.settings.copy(triggerAction = index) }
-                  .background(if (AppState.settings.triggerAction == index) NeonPurple else Color.Transparent)
-                  .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-              ) {
-                  Text(name, color = GhostWhite, fontSize = 12.sp)
-              }
-            }
-          }
-        }
-        
-        Column {
-          Text("Trigger Mode", color = GhostWhite)
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Obsidian)
-          ) {
-            val modes = listOf("Visual Slider", "Full Screen Edge")
-            modes.forEachIndexed { index, name ->
-              Box(
-                modifier = Modifier
-                  .weight(1f)
-                  .clickable { AppState.settings = AppState.settings.copy(triggerMode = index) }
-                  .background(if (AppState.settings.triggerMode == index) NeonPurple else Color.Transparent)
-                  .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-              ) {
-                  Text(name, color = GhostWhite, fontSize = 12.sp)
-              }
-            }
-          }
-        }
-        
-        Column {
-          Text("Slider Color", color = GhostWhite)
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-              val colors = listOf(ElectricBlue, NeonPurple, HyperPink, Color(0xFFFFC107), Color(0xFF4CAF50), Color.White)
-              colors.forEach { color ->
-                  Box(
-                      modifier = Modifier
-                          .size(32.dp)
-                          .clip(CircleShape)
-                          .background(color)
-                          .border(2.dp, if (AppState.settings.triggerColor == color) GhostWhite else Color.Transparent, CircleShape)
-                          .clickable { AppState.settings = AppState.settings.copy(triggerColorArgb = color.toArgb(), triggerGradientColorArgb = null) }
-                  )
-              }
-              Box(
-                  modifier = Modifier
-                      .size(32.dp)
-                      .clip(CircleShape)
-                      .background(Brush.sweepGradient(listOf(Color.Red, Color.Green, Color.Blue, Color.Red)))
-                      .border(1.dp, SoftGray, CircleShape)
-                      .clickable { showColorPicker = true },
-                  contentAlignment = Alignment.Center
-              ) {
-                  Icon(Icons.Rounded.ColorLens, null, tint = Color.White, modifier = Modifier.size(16.dp))
-              }
-          }
-          Spacer(modifier = Modifier.height(16.dp))
-          Text("Slider Gradient (Optional)", color = GhostWhite)
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-              Box(
-                  modifier = Modifier
-                      .size(32.dp)
-                      .clip(CircleShape)
-                      .background(Color.Transparent)
-                      .border(1.dp, SoftGray, CircleShape)
-                      .clickable { AppState.settings = AppState.settings.copy(triggerGradientColorArgb = null) },
-                  contentAlignment = Alignment.Center
-              ) {
-                  Icon(Icons.Rounded.Close, null, tint = SoftGray, modifier = Modifier.size(16.dp))
-              }
-              val colors = listOf(ElectricBlue, NeonPurple, HyperPink, Color(0xFFFFC107), Color(0xFF4CAF50), Color.White)
-              colors.forEach { color ->
-                  Box(
-                      modifier = Modifier
-                          .size(32.dp)
-                          .clip(CircleShape)
-                          .background(color)
-                          .border(2.dp, if (AppState.settings.triggerGradientColor == color) GhostWhite else Color.Transparent, CircleShape)
-                          .clickable { AppState.settings = AppState.settings.copy(triggerGradientColorArgb = color.toArgb()) }
-                  )
-              }
-          }
-        }
-      }
-      
-      Text("Visual & Opacity", color = ElectricBlue, fontWeight = FontWeight.Bold)
-      Column(
-        modifier = Modifier
-          .clip(RoundedCornerShape(16.dp))
-          .background(SurfaceDark)
-          .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-      ) {
-        Column {
-          Text("Sidebar Blur / Opacity", color = GhostWhite)
-          Slider(
-            value = AppState.settings.sidebarOpacity,
-            onValueChange = { AppState.settings = AppState.settings.copy(sidebarOpacity = it) },
-            valueRange = 0.5f..1f,
-            colors = SliderDefaults.colors(thumbColor = ElectricBlue, activeTrackColor = ElectricBlue)
-          )
-        }
-        Column {
-          Text("Default Window Opacity", color = GhostWhite)
-          Slider(
-            value = AppState.settings.windowOpacity,
-            onValueChange = { AppState.settings = AppState.settings.copy(windowOpacity = it) },
-            valueRange = 0.3f..1f,
-            colors = SliderDefaults.colors(thumbColor = ElectricBlue, activeTrackColor = ElectricBlue)
-          )
-        }
-      }
-
-      Text("Legal & About", color = SoftGray, fontWeight = FontWeight.Bold)
-      Column(
-        modifier = Modifier
-          .clip(RoundedCornerShape(16.dp))
-          .background(SurfaceDark)
-      ) {
-          LegalMenuItem("Terms & Conditions") { onNavigate("terms") }
-          HorizontalDivider(color = Obsidian)
-          LegalMenuItem("Privacy Policy") { onNavigate("privacy") }
-          HorizontalDivider(color = Obsidian)
-          LegalMenuItem("Disclaimer") { onNavigate("disclaimer") }
-          HorizontalDivider(color = Obsidian)
-          LegalMenuItem("About") { onNavigate("about") }
-      }
-      
-      Spacer(modifier = Modifier.height(80.dp))
-    }
-    
-    if (showColorPicker) {
-        var r by remember { mutableFloatStateOf(AppState.settings.triggerColor.red) }
-        var g by remember { mutableFloatStateOf(AppState.settings.triggerColor.green) }
-        var b by remember { mutableFloatStateOf(AppState.settings.triggerColor.blue) }
-        
-        AlertDialog(
-            onDismissRequest = { showColorPicker = false },
-            title = { Text("Custom Color", color = GhostWhite) },
-            text = {
-                Column {
-                    Box(modifier = Modifier.fillMaxWidth().height(50.dp).clip(RoundedCornerShape(8.dp)).background(Color(r, g, b)))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Red", color = GhostWhite)
-                    Slider(value = r, onValueChange = { r = it }, colors = SliderDefaults.colors(thumbColor = Color.Red, activeTrackColor = Color.Red))
-                    Text("Green", color = GhostWhite)
-                    Slider(value = g, onValueChange = { g = it }, colors = SliderDefaults.colors(thumbColor = Color.Green, activeTrackColor = Color.Green))
-                    Text("Blue", color = GhostWhite)
-                    Slider(value = b, onValueChange = { b = it }, colors = SliderDefaults.colors(thumbColor = Color.Blue, activeTrackColor = Color.Blue))
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { 
-                    AppState.settings = AppState.settings.copy(triggerColorArgb = Color(r, g, b).toArgb(), triggerGradientColorArgb = null)
-                    showColorPicker = false 
-                }) { Text("Save", color = ElectricBlue) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showColorPicker = false }) { Text("Cancel", color = SoftGray) }
-            },
-            containerColor = SurfaceDark
-        )
-    }
-    }
-  }
-}
-
-@Composable
 fun LegalMenuItem(title: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
@@ -1104,7 +730,7 @@ fun LegalMenuItem(title: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun TriggerComponent() {
+fun TriggerComponent(isRight: Boolean = AppState.lastTriggeredSide == 1) {
     val haptics = LocalHapticFeedback.current
     var isDragging by remember { mutableStateOf(false) }
     var isNotifying by remember { mutableStateOf(false) }
@@ -1156,14 +782,15 @@ fun TriggerComponent() {
         }
         .pointerInput(AppState.settings.triggerAction) {
             detectTapGestures(
-                onDoubleTap = { if (AppState.settings.triggerAction == 2) AppState.sidebarVisible = true },
-                onTap = { if (AppState.settings.triggerAction == 1) AppState.sidebarVisible = true }
+                onDoubleTap = { if (AppState.settings.triggerAction == 2) { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); AppState.lastTriggeredSide = if (isRight) 1 else 0; AppState.sidebarVisible = true } },
+                onTap = { if (AppState.settings.triggerAction == 1) { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); AppState.lastTriggeredSide = if (isRight) 1 else 0; AppState.sidebarVisible = true } }
             )
         }
-        .pointerInput(AppState.settings.isRightEdge, AppState.settings.triggerAction) {
+        .pointerInput(isRight, AppState.settings.triggerAction) {
             detectDragGestures(
                 onDragStart = { 
                     isDragging = true 
+                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                 },
                 onDragEnd = { 
                     isDragging = false 
@@ -1174,15 +801,17 @@ fun TriggerComponent() {
             ) { change, dragAmount ->
                 change.consume()
                 if (AppState.settings.triggerAction == 0) {
-                    val dx = if (AppState.settings.isRightEdge) -with(density) { dragAmount.x.toDp().value } else with(density) { dragAmount.x.toDp().value }
+                    val dx = if (isRight) -with(density) { dragAmount.x.toDp().value } else with(density) { dragAmount.x.toDp().value }
                     val dy = with(density) { dragAmount.y.toDp().value }
                     if (dx > 5 && kotlin.math.abs(dx) > kotlin.math.abs(dy) && !AppState.sidebarVisible) {
+                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        AppState.lastTriggeredSide = if (isRight) 1 else 0
                         AppState.sidebarVisible = true
                     }
                 }
             }
         }
-        .pointerInput(AppState.settings.isRightEdge, AppState.settings.triggerMode) {
+        .pointerInput(isRight, AppState.settings.triggerMode) {
             if (AppState.settings.triggerMode == 0) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { 
@@ -1206,10 +835,10 @@ fun TriggerComponent() {
                         triggerOffsetY = (AppState.settings.triggerOffsetY + dy).coerceIn(-400f, 400f)
                     )
                     
-                    if (AppState.settings.isRightEdge && dx < -50) {
-                        AppState.settings = AppState.settings.copy(isRightEdge = false)
-                    } else if (!AppState.settings.isRightEdge && dx > 50) {
-                        AppState.settings = AppState.settings.copy(isRightEdge = true)
+                    if (isRight && dx < -50) {
+                        AppState.settings = AppState.settings.copy(edgePosition = 0)
+                    } else if (!isRight && dx > 50) {
+                        AppState.settings = AppState.settings.copy(edgePosition = 1)
                     }
                 }
             }
@@ -1219,433 +848,249 @@ fun TriggerComponent() {
 
 @Composable
 fun SidebarComponent(onAppClick: (AppInfo, Boolean) -> Unit, onToggleHud: () -> Unit, isHudVisible: Boolean, onExit: () -> Unit) {
-  var currentTab by remember { mutableStateOf("Apps") }
-  
-  val topStartRadius = if (AppState.settings.isRightEdge) 32.dp else 0.dp
-  val bottomStartRadius = if (AppState.settings.isRightEdge) 32.dp else 0.dp
-  val topEndRadius = if (!AppState.settings.isRightEdge) 32.dp else 0.dp
-  val bottomEndRadius = if (!AppState.settings.isRightEdge) 32.dp else 0.dp
-  val shape = RoundedCornerShape(topStartRadius, topEndRadius, bottomEndRadius, bottomStartRadius)
+    val context = LocalContext.current
+    var currentTab by remember { mutableIntStateOf(0) }
+    
+    val topStartRadius = if (AppState.lastTriggeredSide == 1) 32.dp else 0.dp
+    val bottomStartRadius = if (AppState.lastTriggeredSide == 1) 32.dp else 0.dp
+    val topEndRadius = if (AppState.lastTriggeredSide == 0) 32.dp else 0.dp
+    val bottomEndRadius = if (AppState.lastTriggeredSide == 0) 32.dp else 0.dp
+    val shape = RoundedCornerShape(topStartRadius, topEndRadius, bottomEndRadius, bottomStartRadius)
 
-  val context = LocalContext.current
-  val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager }
-  val maxVolume = remember { audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() }
-  var volumeState by remember { mutableFloatStateOf(audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) / maxVolume) }
-
-  var brightnessState by remember { 
-      mutableFloatStateOf(
-          try {
-              android.provider.Settings.System.getInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f
-          } catch (e: android.provider.Settings.SettingNotFoundException) {
-              0.5f
-          }
-      )
-  }
-  
-  LaunchedEffect(Unit) {
-      while (true) {
-          volumeState = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) / maxVolume
-          brightnessState = try {
-              android.provider.Settings.System.getInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f
-          } catch (e: android.provider.Settings.SettingNotFoundException) {
-              0.5f
-          }
-          kotlinx.coroutines.delay(500)
-      }
-  }
-  
-  var toastMessage by remember { mutableStateOf<String?>(null) }
-  LaunchedEffect(toastMessage) {
-      if (toastMessage != null) {
-          kotlinx.coroutines.delay(2000)
-          toastMessage = null
-      }
-  }
-
-  androidx.compose.animation.AnimatedVisibility(
-      visible = AppState.sidebarVisible,
-      enter = androidx.compose.animation.fadeIn(),
-      exit = androidx.compose.animation.fadeOut()
-  ) {
-    Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { AppState.sidebarVisible = false }) }) {
-      androidx.compose.animation.AnimatedVisibility(
+    androidx.compose.animation.AnimatedVisibility(
         visible = AppState.sidebarVisible,
-        modifier = Modifier.align(if (AppState.settings.isRightEdge) Alignment.CenterEnd else Alignment.CenterStart),
-        enter = androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) + 
-                androidx.compose.animation.scaleIn(initialScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (AppState.settings.isRightEdge) 1f else 0f, 0.5f), animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.FastOutSlowInEasing)),
-        exit = androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(200)) + 
-               androidx.compose.animation.scaleOut(targetScale = 0.3f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (AppState.settings.isRightEdge) 1f else 0f, 0.5f), animationSpec = androidx.compose.animation.core.tween(200))
-      ) {
-        Box(
-          modifier = Modifier
-            .width(340.dp)
-            .fillMaxHeight()
-            .pointerInput(Unit) { detectTapGestures { /* consume */ } }
-            .padding(
-          start = if (AppState.settings.isRightEdge) 16.dp else 0.dp,
-          end = if (!AppState.settings.isRightEdge) 16.dp else 0.dp
-        )
-        .clip(shape)
-        .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = AppState.settings.sidebarOpacity), SurfaceDark.copy(alpha = AppState.settings.sidebarOpacity))))
-        .border(1.dp, Color.White.copy(alpha = 0.5f), shape)
-        .padding(24.dp)
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut()
     ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-      // Tab Row
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .clip(RoundedCornerShape(16.dp))
-          .background(SurfaceDark),
-        horizontalArrangement = Arrangement.SpaceEvenly
-      ) {
-        SidebarTab("Apps", currentTab == "Apps") { currentTab = "Apps" }
-        SidebarTab("Tools", currentTab == "Tools") { currentTab = "Tools" }
-        SidebarTab("Control", currentTab == "Control") { currentTab = "Control" }
-      }
-      
-      Spacer(modifier = Modifier.height(24.dp))
-      
-      Column(
-        modifier = Modifier
-          .weight(1f)
-          .verticalScroll(rememberScrollState())
-      ) {
-        when (currentTab) {
-          "Apps" -> {
-            val floatingAppsList = AppState.installedApps.filter { AppState.floatingApps.contains(it.packageName) }
-            val pinnedAppsList = AppState.installedApps.filter { AppState.pinnedApps.contains(it.packageName) }
-
-            Text("Floating Apps (${floatingAppsList.size}/3)", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.heightIn(max = 200.dp)
+        Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { AppState.sidebarVisible = false }) }) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = AppState.sidebarVisible,
+                modifier = Modifier.align(if (AppState.lastTriggeredSide == 1) Alignment.CenterEnd else Alignment.CenterStart),
+                enter = androidx.compose.animation.slideInHorizontally(animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 400f), initialOffsetX = { if (AppState.lastTriggeredSide == 1) it else -it }),
+                exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { if (AppState.lastTriggeredSide == 1) it else -it })
             ) {
-                items(floatingAppsList) { app ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(4.dp).clickable { onAppClick(app, true) }
-                    ) {
-                        Image(bitmap = app.icon, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)))
-                        Text(app.name, color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(24.dp))
-            Text("Direct Launch Apps (${pinnedAppsList.size}/10)", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.heightIn(max = 300.dp)
-            ) {
-                items(pinnedAppsList) { app ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(4.dp).clickable { onAppClick(app, false) }
-                    ) {
-                        Image(bitmap = app.icon, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)))
-                        Text(app.name, color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            Text("Quick Actions", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            var isFlashlightOn by remember { mutableStateOf(false) }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { 
-                        try {
-                            val intent = Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            android.widget.Toast.makeText(context, "Cannot open Camera", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        AppState.sidebarVisible = false
-                    }
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight(0.9f)
+                        .width(360.dp)
+                        .clip(shape)
+                        .background(androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(Obsidian.copy(alpha = AppState.settings.sidebarOpacity), SurfaceDark.copy(alpha = AppState.settings.sidebarOpacity))
+                        ))
+                        .border(1.dp, SurfaceGlass, shape)
+                        .pointerInput(Unit) { detectTapGestures { /* consume tap inside */ } }
                 ) {
-                    Icon(Icons.Rounded.Camera, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("Camera", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { 
-                        try {
-                            val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-                            val cameraId = cameraManager.cameraIdList[0]
-                            isFlashlightOn = !isFlashlightOn
-                            cameraManager.setTorchMode(cameraId, isFlashlightOn)
-                        } catch (e: Exception) {
-                            android.widget.Toast.makeText(context, "Cannot toggle flashlight", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                ) {
-                    Icon(Icons.Rounded.FlashlightOn, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = if (isFlashlightOn) Color(0xFFFFC107) else GhostWhite)
-                    Text("Flashlight", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { 
-                        try {
-                            val intent = Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            android.widget.Toast.makeText(context, "Cannot open Alarms", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        AppState.sidebarVisible = false
-                    }
-                ) {
-                    Icon(Icons.Rounded.Alarm, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("Alarms", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { 
-                        try {
-                            val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            android.widget.Toast.makeText(context, "Cannot open Settings", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        AppState.sidebarVisible = false
-                    }
-                ) {
-                    Icon(Icons.Rounded.Settings, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(SurfaceDark).padding(8.dp), tint = GhostWhite)
-                    Text("Settings", color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-          }
-          "Tools" -> {
-            Text("Automation & AI Tools", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            val openTool = { title: String, icon: ImageVector, color: Color ->
-                AppState.windows.add(
-                    FloatingWindowData(
-                        id = AppState.windowIdCounter++,
-                        title = title,
-                        icon = icon,
-                        appIcon = null,
-                        offset = androidx.compose.ui.unit.IntOffset(100, 200 + (AppState.windowIdCounter * 50)),
-                        size = androidx.compose.ui.unit.IntSize(800, 1000),
-                        opacity = AppState.settings.windowOpacity,
-                        isLocked = false,
-                        color = color,
-                        packageName = ""
-                    )
-                )
-                AppState.sidebarVisible = false
-            }
-            
-            if (AppState.visibleTools.contains("Macro & Auto-Clicker")) {
-                ToolItem(Icons.Rounded.SmartButton, "Macro & Auto-Clicker", "Record & loop touch sequences", ElectricBlue) { openTool("Macro & Auto-Clicker", Icons.Rounded.SmartButton, ElectricBlue) }
-            }
-            if (AppState.visibleTools.contains("Live Screen OCR")) {
-                ToolItem(Icons.Rounded.DocumentScanner, "Live Screen OCR", "Extract text from anywhere", HyperPink) { openTool("Live Screen OCR", Icons.Rounded.DocumentScanner, HyperPink) }
-            }
-            if (AppState.visibleTools.contains("Universal Clipboard")) {
-                ToolItem(Icons.Rounded.ContentPaste, "Universal Clipboard", "History of copied assets", NeonPurple) { openTool("Universal Clipboard", Icons.Rounded.ContentPaste, NeonPurple) }
-            }
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            Text("System Utilities", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            if (AppState.visibleTools.contains("Floating System Monitor")) {
-                ToolItemToggle(Icons.Rounded.Speed, "Floating System Monitor", "Show FPS, RAM, CPU", Color(0xFFFFC107), isHudVisible, onToggleHud)
-            }
-          }
-          "Control" -> {
-            Text("Control Center", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            val toggleControls = mutableListOf<@Composable () -> Unit>()
-            if (AppState.visibleControls.contains("Wi-Fi")) toggleControls.add { ToggleItem(Icons.Rounded.Wifi, "Wi-Fi", true, ElectricBlue) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Bluetooth")) toggleControls.add { ToggleItem(Icons.Rounded.Bluetooth, "Bluetooth", false, HyperPink) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Data")) toggleControls.add { ToggleItem(Icons.Rounded.DataUsage, "Data", true, NeonPurple) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_DATA_ROAMING_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Ghost Mode")) toggleControls.add { ToggleItem(Icons.Rounded.Gamepad, "Ghost Mode", false, Color.Red) { toastMessage = "Ghost Mode Toggled" } }
-            if (AppState.visibleControls.contains("Location")) toggleControls.add { ToggleItem(Icons.Rounded.LocationOn, "Location", true, Color(0xFF4CAF50)) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Airplane Mode")) toggleControls.add { ToggleItem(Icons.Rounded.AirplanemodeActive, "Airplane", false, Color(0xFFFFC107)) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_AIRPLANE_MODE_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Flashlight")) toggleControls.add { ToggleItem(Icons.Rounded.Highlight, "Flashlight", false, Color.White) { 
-                try {
-                    val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-                    val cameraId = cameraManager.cameraIdList[0]
-                    val isTorchOn = it.contains("Enabled")
-                    cameraManager.setTorchMode(cameraId, isTorchOn)
-                } catch (e: Exception) {
-                    toastMessage = "Flashlight error"
-                }
-            } }
-            if (AppState.visibleControls.contains("Hotspot")) toggleControls.add { ToggleItem(Icons.Rounded.WifiTethering, "Hotspot", false, Color.Cyan) { 
-                val intent = Intent(Intent.ACTION_MAIN).apply {
-                    setClassName("com.android.settings", "com.android.settings.TetherSettings")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try { context.startActivity(intent) } catch (e: Exception) { toastMessage = "Cannot open hotspot settings" }
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Do Not Disturb")) toggleControls.add { ToggleItem(Icons.Rounded.DoNotDisturbOn, "DND", false, Color.Magenta) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_ZEN_MODE_PRIORITY_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("Screen Rotation")) toggleControls.add { ToggleItem(Icons.Rounded.ScreenRotation, "Rotation", true, ElectricBlue) { 
-                if (android.provider.Settings.System.canWrite(context)) {
-                    val current = android.provider.Settings.System.getInt(context.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 0)
-                    android.provider.Settings.System.putInt(context.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, if (current == 1) 0 else 1)
-                } else {
-                    toastMessage = "Require Write Settings Permission"
-                }
-            } }
-            if (AppState.visibleControls.contains("Screen Record")) toggleControls.add { ToggleItem(Icons.Rounded.Videocam, "Record", false, Color.Red) { toastMessage = "Screen Record feature coming soon" } }
-            if (AppState.visibleControls.contains("Dark Mode")) toggleControls.add { ToggleItem(Icons.Rounded.DarkMode, "Dark Mode", true, Color.Gray) { 
-                val uiModeManager = context.getSystemService(android.content.Context.UI_MODE_SERVICE) as android.app.UiModeManager
-                val current = uiModeManager.nightMode
-                uiModeManager.nightMode = if (current == android.app.UiModeManager.MODE_NIGHT_YES) android.app.UiModeManager.MODE_NIGHT_NO else android.app.UiModeManager.MODE_NIGHT_YES
-            } }
-            if (AppState.visibleControls.contains("Battery Saver")) toggleControls.add { ToggleItem(Icons.Rounded.BatterySaver, "Battery", false, Color(0xFF4CAF50)) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-            if (AppState.visibleControls.contains("NFC")) toggleControls.add { ToggleItem(Icons.Rounded.Nfc, "NFC", false, Color.Cyan) { 
-                context.startActivity(Intent(android.provider.Settings.ACTION_NFC_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                AppState.sidebarVisible = false
-            } }
-
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                toggleControls.chunked(4).forEach { rowItems ->
-                    Row(horizontalArrangement = Arrangement.Start, modifier = Modifier.fillMaxWidth()) {
-                        rowItems.forEach { 
-                            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                                it()
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Header
+                        Row(modifier = Modifier.fillMaxWidth().background(SurfaceGlass.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("Short Panel", color = GhostWhite, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                            IconButton(onClick = onExit) {
+                                Icon(Icons.Rounded.PowerSettingsNew, "Close", tint = HyperPink)
                             }
                         }
-                        for (i in rowItems.size until 4) {
-                            Spacer(modifier = Modifier.weight(1f))
+                        
+                        // Tabs
+                        val tabs = listOf("Apps", "Tools", "Controls")
+                        androidx.compose.material3.TabRow(
+                            selectedTabIndex = currentTab,
+                            containerColor = Color.Transparent,
+                            contentColor = ElectricBlue,
+                            indicator = { tabPositions ->
+                                if (currentTab < tabPositions.size) {
+                                    androidx.compose.material3.TabRowDefaults.Indicator(
+                                        modifier = Modifier.wrapContentSize(Alignment.BottomStart).offset(x = tabPositions[currentTab].left).width(tabPositions[currentTab].width),
+                                        color = ElectricBlue
+                                    )
+                                }
+                            }
+                        ) {
+                            tabs.forEachIndexed { index, title ->
+                                androidx.compose.material3.Tab(
+                                    selected = currentTab == index,
+                                    onClick = { currentTab = index },
+                                    text = { Text(title, color = if (currentTab == index) ElectricBlue else SoftGray, fontWeight = FontWeight.Bold) }
+                                )
+                            }
+                        }
+                        
+                        // Content
+                        Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            when (currentTab) {
+                                0 -> {
+                                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                                        val pinnedAppsList = AppState.installedApps.filter { AppState.pinnedApps.contains(it.packageName) }
+                                        if (pinnedAppsList.isNotEmpty()) {
+                                            Column {
+                                                Text("Direct Launch", color = NeonPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                Spacer(modifier = Modifier.height(12.dp))
+                                                pinnedAppsList.chunked(4).forEach { rowApps ->
+                                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                                                        rowApps.forEach { app ->
+                                                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onAppClick(app, false) }.width(72.dp)) {
+                                                                Image(bitmap = app.icon, contentDescription = app.name, modifier = Modifier.size(52.dp).clip(CircleShape))
+                                                                Spacer(modifier = Modifier.height(4.dp))
+                                                                Text(app.name, color = GhostWhite, fontSize = 10.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                                            }
+                                                        }
+                                                        val remaining = 4 - rowApps.size
+                                                        for(i in 0 until remaining) { Spacer(Modifier.width(72.dp)) }
+                                                    }
+                                                    Spacer(modifier = Modifier.height(16.dp))
+                                                }
+                                            }
+                                        }
+                                        
+                                        val floatingAppsList = AppState.installedApps.filter { AppState.floatingApps.contains(it.packageName) }
+                                        if (floatingAppsList.isNotEmpty()) {
+                                            Column {
+                                                Text("Floating Windows", color = ElectricBlue, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                Spacer(modifier = Modifier.height(12.dp))
+                                                floatingAppsList.chunked(4).forEach { rowApps ->
+                                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                                                        rowApps.forEach { app ->
+                                                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onAppClick(app, true) }.width(72.dp)) {
+                                                                Box(modifier = Modifier.size(56.dp).background(SurfaceDark.copy(alpha=0.8f), RoundedCornerShape(12.dp)).padding(8.dp), contentAlignment = Alignment.Center) {
+                                                                    Image(bitmap = app.icon, contentDescription = app.name, modifier = Modifier.size(40.dp))
+                                                                }
+                                                                Spacer(modifier = Modifier.height(4.dp))
+                                                                Text(app.name, color = GhostWhite, fontSize = 10.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                                            }
+                                                        }
+                                                        val remaining = 4 - rowApps.size
+                                                        for(i in 0 until remaining) { Spacer(Modifier.width(72.dp)) }
+                                                    }
+                                                    Spacer(modifier = Modifier.height(16.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                1 -> {
+                                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        if (AppState.visibleTools.contains("Macro & Auto-Clicker")) {
+                                            ToolItem(Icons.Rounded.TouchApp, "Macro & Auto-Clicker", "Automate repetitive clicks", NeonPurple) {
+                                                AppState.windows.add(FloatingWindowData(id = AppState.windowIdCounter++, title = "Macro & Auto-Clicker", icon = Icons.Rounded.TouchApp, offset = androidx.compose.ui.unit.IntOffset(100, 200), size = androidx.compose.ui.unit.IntSize(600, 400), color = NeonPurple))
+                                                AppState.sidebarVisible = false
+                                            }
+                                        }
+                                        if (AppState.visibleTools.contains("Live Screen OCR")) {
+                                            ToolItem(Icons.Rounded.TextSnippet, "Live Screen OCR", "Extract text from screen", ElectricBlue) {
+                                                AppState.windows.add(FloatingWindowData(id = AppState.windowIdCounter++, title = "Live Screen OCR", icon = Icons.Rounded.TextSnippet, offset = androidx.compose.ui.unit.IntOffset(150, 250), size = androidx.compose.ui.unit.IntSize(700, 500), color = ElectricBlue))
+                                                AppState.sidebarVisible = false
+                                            }
+                                        }
+                                        if (AppState.visibleTools.contains("Universal Clipboard")) {
+                                            ToolItem(Icons.Rounded.ContentPaste, "Universal Clipboard", "Manage copied text history", HyperPink) {
+                                                AppState.windows.add(FloatingWindowData(id = AppState.windowIdCounter++, title = "Universal Clipboard", icon = Icons.Rounded.ContentPaste, offset = androidx.compose.ui.unit.IntOffset(50, 100), size = androidx.compose.ui.unit.IntSize(800, 900), color = HyperPink))
+                                                AppState.sidebarVisible = false
+                                            }
+                                        }
+                                        if (AppState.visibleTools.contains("Floating System Monitor")) {
+                                            ToolItemToggle(Icons.Rounded.Memory, "Floating System Monitor", "Live CPU/RAM overlay", Color(0xFF00FF87), isHudVisible) {
+                                                onToggleHud()
+                                            }
+                                        }
+                                    }
+                                }
+                                2 -> {
+                                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                                        // Sliders
+                                        Column(modifier = Modifier.fillMaxWidth().background(SurfaceDark, RoundedCornerShape(16.dp)).padding(16.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Rounded.VolumeUp, "Volume", tint = GhostWhite)
+                                                Spacer(modifier = Modifier.width(16.dp))
+                                                val audioManager = context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                                                val maxVolume = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()
+                                                var volume by remember { mutableFloatStateOf(audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) / maxVolume) }
+                                                androidx.compose.material3.Slider(
+                                                    value = volume,
+                                                    onValueChange = { 
+                                                        volume = it
+                                                        audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (it * maxVolume).toInt(), 0)
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = NeonPurple, activeTrackColor = NeonPurple)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Rounded.BrightnessMedium, "Brightness", tint = GhostWhite)
+                                                Spacer(modifier = Modifier.width(16.dp))
+                                                var brightness by remember { 
+                                                    mutableFloatStateOf(
+                                                        try {
+                                                            android.provider.Settings.System.getInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f
+                                                        } catch(e: Exception) { 0.5f }
+                                                    ) 
+                                                }
+                                                androidx.compose.material3.Slider(
+                                                    value = brightness,
+                                                    onValueChange = { 
+                                                        brightness = it
+                                                        try {
+                                                            if (android.provider.Settings.System.canWrite(context)) {
+                                                                android.provider.Settings.System.putInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE, android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+                                                                android.provider.Settings.System.putInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, (it * 255).toInt())
+                                                            } else {
+                                                                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                                                context.startActivity(intent)
+                                                                android.widget.Toast.makeText(context, "Grant Write Settings permission", android.widget.Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        } catch(e: Exception) {}
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = Color(0xFFFFC107), activeTrackColor = Color(0xFFFFC107))
+                                                )
+                                            }
+                                        }
+                                        
+                                        // Grid
+                                        if (AppState.visibleControls.isNotEmpty()) {
+                                            Column {
+                                                Text("Quick Toggles", color = Color(0xFFFFC107), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                Spacer(modifier = Modifier.height(16.dp))
+                                                AppState.visibleControls.chunked(4).forEach { rowControls ->
+                                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                                                        rowControls.forEach { control ->
+                                                            val icon = when(control) {
+                                                                "Wi-Fi" -> Icons.Rounded.Wifi
+                                                                "Bluetooth" -> Icons.Rounded.Bluetooth
+                                                                "Data" -> Icons.Rounded.DataUsage
+                                                                "Ghost Mode" -> Icons.Rounded.VisibilityOff
+                                                                "Brightness" -> Icons.Rounded.BrightnessMedium
+                                                                "Volume" -> Icons.Rounded.VolumeUp
+                                                                "Location" -> Icons.Rounded.LocationOn
+                                                                "Airplane Mode" -> Icons.Rounded.AirplanemodeActive
+                                                                "Flashlight" -> Icons.Rounded.Highlight
+                                                                "Hotspot" -> Icons.Rounded.WifiTethering
+                                                                "Do Not Disturb" -> Icons.Rounded.DoNotDisturbOn
+                                                                "Screen Rotation" -> Icons.Rounded.ScreenRotation
+                                                                "Screen Record" -> Icons.Rounded.Videocam
+                                                                "Dark Mode" -> Icons.Rounded.DarkMode
+                                                                "Battery Saver" -> Icons.Rounded.BatterySaver
+                                                                "NFC" -> Icons.Rounded.Nfc
+                                                                else -> Icons.Rounded.Settings
+                                                            }
+                                                            ControlIcon(icon, control) {
+                                                                ControlManager.toggleSetting(context, control)
+                                                            }
+                                                        }
+                                                        val remaining = 4 - rowControls.size
+                                                        for(i in 0 until remaining) { Spacer(Modifier.width(64.dp)) }
+                                                    }
+                                                    Spacer(modifier = Modifier.height(16.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            if (AppState.visibleControls.contains("Brightness")) {
-                PremiumSliderItem(
-                  icon = Icons.Rounded.LightMode, 
-                  label = "Brightness",
-                  value = brightnessState,
-                  onValueChange = {
-                      brightnessState = it
-                      if (android.provider.Settings.System.canWrite(context)) {
-                          android.provider.Settings.System.putInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE, android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
-                          android.provider.Settings.System.putInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, (it * 255).toInt())
-                      } else {
-                          val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
-                              data = android.net.Uri.parse("package:${context.packageName}")
-                              addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                          }
-                          context.startActivity(intent)
-                          AppState.sidebarVisible = false
-                      }
-                  },
-                  color = ElectricBlue
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-            if (AppState.visibleControls.contains("Volume")) {
-                PremiumSliderItem(
-                  icon = Icons.Rounded.VolumeUp, 
-                  label = "Media Volume",
-                  value = volumeState,
-                  onValueChange = {
-                      volumeState = it
-                      audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (it * maxVolume).toInt(), 0)
-                  },
-                  color = HyperPink
-                )
-            }
-          }
         }
-      }
-
-      Spacer(modifier = Modifier.height(16.dp))
-      Button(
-        onClick = { AppState.sidebarVisible = false },
-        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f)),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Text("Close Sidebar", color = GhostWhite)
-      }
-      Spacer(modifier = Modifier.height(8.dp))
-      Button(
-        onClick = onExit,
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.2f)),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Text("Stop Master Service", color = Color.Red)
-      }
-      Spacer(modifier = Modifier.height(16.dp))
     }
-  }
-  
-  androidx.compose.animation.AnimatedVisibility(
-      visible = toastMessage != null,
-      modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp),
-      enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically(initialOffsetY = { 50 }),
-      exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.slideOutVertically(targetOffsetY = { 50 })
-  ) {
-      Box(
-          modifier = Modifier
-              .clip(RoundedCornerShape(16.dp))
-              .background(Obsidian.copy(alpha = 0.95f))
-              .border(1.dp, ElectricBlue.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-              .padding(horizontal = 24.dp, vertical = 12.dp)
-      ) {
-          Text(toastMessage ?: "", color = GhostWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-      }
-  }
-}
-}
-}
-}
-
-@Composable
-fun SidebarTab(title: String, isSelected: Boolean, onClick: () -> Unit) {
-  Box(
-    modifier = Modifier
-      .padding(4.dp)
-      .clip(RoundedCornerShape(12.dp))
-      .background(if (isSelected) Obsidian else Color.Transparent)
-      .clickable(onClick = onClick)
-      .padding(horizontal = 16.dp, vertical = 8.dp),
-    contentAlignment = Alignment.Center
-  ) {
-    Text(
-      title,
-      color = if (isSelected) ElectricBlue else SoftGray,
-      fontSize = 14.sp,
-      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-    )
-  }
 }
 
 @Composable
@@ -1735,7 +1180,7 @@ fun SystemMonitorHud(windowManager: WindowManager, composeView: ComposeView) {
   Box(
     modifier = Modifier
       .clip(RoundedCornerShape(16.dp))
-      .background(Color.Black.copy(alpha = 0.7f))
+      .background(Color.DarkGray.copy(alpha = 0.95f))
       .border(1.dp, Color(0xFFFFC107).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
       .pointerInput(Unit) {
         detectDragGestures { change, dragAmount ->
@@ -1884,9 +1329,26 @@ fun FloatingWindowComponent(
               .border(2.dp, windowData.color, CircleShape)
               .pointerInput(Unit) {
                   detectDragGestures(
-                      onDragStart = { isDragging = true },
-                      onDragEnd = { isDragging = false },
-                      onDragCancel = { isDragging = false }
+                      onDragStart = { 
+                          isDragging = true 
+                          AppState.isDraggingBubble = true
+                      },
+                      onDragEnd = { 
+                          isDragging = false 
+                          AppState.isDraggingBubble = false
+                          val params = composeView.layoutParams as WindowManager.LayoutParams
+                          val screenHeight = context.resources.displayMetrics.heightPixels
+                          val screenWidth = context.resources.displayMetrics.widthPixels
+                          // The close icon is at bottom center. params.x and y are from top left.
+                          // Icon size is 60dp. screenWidth/2 is center.
+                          if (params.y > screenHeight - 400 && params.x > screenWidth / 2 - 200 && params.x < screenWidth / 2 + 200) {
+                              onClose()
+                          }
+                      },
+                      onDragCancel = { 
+                          isDragging = false 
+                          AppState.isDraggingBubble = false
+                      }
                   ) { change, dragAmount ->
                       change.consume()
                       val params = composeView.layoutParams as WindowManager.LayoutParams
@@ -2134,7 +1596,7 @@ fun FloatingWindowComponent(
     Box(
       modifier = Modifier
         .align(Alignment.BottomEnd)
-        .size(32.dp)
+        .size(48.dp) // Larger touch target
         .pointerInput(Unit) {
           detectDragGestures { change, dragAmount ->
             change.consume()
@@ -2144,12 +1606,20 @@ fun FloatingWindowComponent(
           }
         }
     ) {
-      Icon(
-        Icons.Rounded.SignalCellular4Bar,
-        contentDescription = null,
-        tint = SoftGray.copy(alpha = 0.5f),
-        modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).size(16.dp)
-      )
+      Box(
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(8.dp)
+          .size(24.dp)
+          .background(windowData.color.copy(alpha = 0.8f), RoundedCornerShape(topStart = 16.dp, bottomEnd = 8.dp, bottomStart = 4.dp, topEnd = 4.dp))
+      ) {
+         Icon(
+           Icons.Rounded.OpenInFull,
+           contentDescription = "Resize",
+           tint = Color.White,
+           modifier = Modifier.size(16.dp).align(Alignment.Center)
+         )
+      }
     }
   }
 }
@@ -2158,7 +1628,7 @@ fun FloatingWindowComponent(
 fun OnboardingScreen(onComplete: () -> Unit) {
     var step by remember { mutableIntStateOf(0) }
     
-    val tWelcome = if (AppState.language == "hi") "ApexPanel Pro में आपका स्वागत है" else "Welcome to ApexPanel Pro"
+    val tWelcome = if (AppState.language == "hi") "Short Panel Pro में आपका स्वागत है" else "Welcome to Short Panel Pro"
     val tDesc = if (AppState.language == "hi") "आपका स्मार्ट साइडबार और फ्लोटिंग विंडो मैनेजर" else "Your smart sidebar and floating window manager"
     val tLang = if (AppState.language == "hi") "भाषा चुनें" else "Choose Language"
     val tNext = if (AppState.language == "hi") "अगला" else "Next"
@@ -2228,5 +1698,17 @@ fun OnboardingScreen(onComplete: () -> Unit) {
                 Text(if (step < 3) tNext else tFinish, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
+}
+
+
+@Composable
+fun ControlIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onClick() }.width(64.dp)) {
+        Box(modifier = Modifier.size(48.dp).background(SurfaceDark, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = label, tint = GhostWhite)
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(label, color = GhostWhite, fontSize = 10.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }

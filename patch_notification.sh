@@ -1,3 +1,4 @@
+cat << 'INNER_EOF' > /app/applet/app/src/main/java/com/yash/shortw/NotificationService.kt
 package com.yash.shortw
 
 import android.service.notification.NotificationListenerService
@@ -17,3 +18,4 @@ class NotificationService : NotificationListenerService() {
         }
     }
 }
+INNER_EOF

@@ -9,6 +9,17 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
@@ -65,7 +76,9 @@ fun View.setupForCompose() {
 
 class OverlayService : Service() {
     private lateinit var windowManager: WindowManager
-    private var triggerView: ComposeView? = null
+    private var triggerViewLeft: ComposeView? = null
+    private var triggerViewRight: ComposeView? = null
+    private var dismissView: ComposeView? = null
     private var sidebarView: ComposeView? = null
     private var hudView: ComposeView? = null
     private val windowViews = mutableMapOf<Int, ComposeView>()
@@ -95,7 +108,7 @@ class OverlayService : Service() {
             this, 0, Intent(this, MainActivity::class.java), android.app.PendingIntent.FLAG_IMMUTABLE
         )
         val notification = androidx.core.app.NotificationCompat.Builder(this, channelId)
-            .setContentTitle("ApexPanel Pro")
+            .setContentTitle("Short Panel Pro")
             .setContentText("Master Service is running")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
             .setContentIntent(pendingIntent)
@@ -107,6 +120,12 @@ class OverlayService : Service() {
         }
         
         setupTrigger()
+        
+                scope.launch {
+            snapshotFlow { AppState.isDraggingBubble }.collect { dragging ->
+                if (dragging) showDismissView() else hideDismissView()
+            }
+        }
         
         scope.launch {
             snapshotFlow { AppState.sidebarVisible }.collect { visible ->
@@ -133,52 +152,76 @@ class OverlayService : Service() {
     }
     
     private fun setupTrigger() {
-        triggerView = ComposeView(this).apply {
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            stopSelf()
+            return
+        }
+
+        triggerViewLeft = ComposeView(this).apply {
             setupForCompose()
-            setContent {
-                MyApplicationTheme {
-                    TriggerComponent()
-                }
+            setContent { MyApplicationTheme { TriggerComponent(isRight = false) } }
+        }
+        triggerViewRight = ComposeView(this).apply {
+            setupForCompose()
+            setContent { MyApplicationTheme { TriggerComponent(isRight = true) } }
+        }
+
+        try {
+            if (AppState.settings.edgePosition == 0 || AppState.settings.edgePosition == 2) {
+                windowManager.addView(triggerViewLeft, createTriggerParams(false))
+            }
+            if (AppState.settings.edgePosition == 1 || AppState.settings.edgePosition == 2) {
+                windowManager.addView(triggerViewRight, createTriggerParams(true))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        
+        scope.launch {
+            snapshotFlow { AppState.settings }.collect { settings ->
+                try {
+                    // Left Trigger
+                    if (settings.edgePosition == 0 || settings.edgePosition == 2) {
+                        if (triggerViewLeft?.parent == null) {
+                            windowManager.addView(triggerViewLeft, createTriggerParams(false))
+                        } else {
+                            windowManager.updateViewLayout(triggerViewLeft, createTriggerParams(false))
+                        }
+                    } else {
+                        if (triggerViewLeft?.parent != null) {
+                            windowManager.removeView(triggerViewLeft)
+                        }
+                    }
+                    
+                    // Right Trigger
+                    if (settings.edgePosition == 1 || settings.edgePosition == 2) {
+                        if (triggerViewRight?.parent == null) {
+                            windowManager.addView(triggerViewRight, createTriggerParams(true))
+                        } else {
+                            windowManager.updateViewLayout(triggerViewRight, createTriggerParams(true))
+                        }
+                    } else {
+                        if (triggerViewRight?.parent != null) {
+                            windowManager.removeView(triggerViewRight)
+                        }
+                    }
+                } catch(e: Exception) { e.printStackTrace() }
             }
         }
+    }
+
+    private fun createTriggerParams(isRight: Boolean): WindowManager.LayoutParams {
         val isFullScreen = AppState.settings.triggerMode == 1
-        val params = WindowManager.LayoutParams(
+        return WindowManager.LayoutParams(
             if (isFullScreen) dpToPx(12f) else dpToPx(AppState.settings.triggerThickness),
             if (isFullScreen) WindowManager.LayoutParams.MATCH_PARENT else dpToPx(AppState.settings.triggerHeight),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = if (AppState.settings.isRightEdge) Gravity.CENTER_VERTICAL or Gravity.END else Gravity.CENTER_VERTICAL or Gravity.START
+            gravity = if (isRight) Gravity.CENTER_VERTICAL or Gravity.END else Gravity.CENTER_VERTICAL or Gravity.START
             x = dpToPx(AppState.settings.triggerOffsetX)
             y = if (isFullScreen) 0 else dpToPx(AppState.settings.triggerOffsetY)
-        }
-        if (android.provider.Settings.canDrawOverlays(this)) {
-            try {
-                windowManager.addView(triggerView, params)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                stopSelf()
-                return
-            }
-        } else {
-            stopSelf()
-            return
-        }
-        
-        scope.launch {
-            snapshotFlow { AppState.settings }.collect { settings ->
-                triggerView?.let { view ->
-                    val p = view.layoutParams as WindowManager.LayoutParams
-                    val isFullScreen = settings.triggerMode == 1
-                    p.width = if (isFullScreen) dpToPx(12f) else dpToPx(settings.triggerThickness)
-                    p.height = if (isFullScreen) WindowManager.LayoutParams.MATCH_PARENT else dpToPx(settings.triggerHeight)
-                    p.x = dpToPx(settings.triggerOffsetX)
-                    p.y = if (isFullScreen) 0 else dpToPx(settings.triggerOffsetY)
-                    p.gravity = if (settings.isRightEdge) Gravity.CENTER_VERTICAL or Gravity.END else Gravity.CENTER_VERTICAL or Gravity.START
-                    windowManager.updateViewLayout(view, p)
-                }
-            }
         }
     }
 
@@ -198,27 +241,23 @@ class OverlayService : Service() {
                 MyApplicationTheme {
                     SidebarComponent(
                         onAppClick = { appInfo, isFloating ->
-                            if (isFloating) {
-                                AppState.windows.add(
-                                    FloatingWindowData(
-                                        id = AppState.windowIdCounter++,
-                                        title = appInfo.name,
-                                        icon = null,
-                                        appIcon = appInfo.icon,
-                                        offset = androidx.compose.ui.unit.IntOffset(100, 200 + (AppState.windowIdCounter * 50)),
-                                        size = androidx.compose.ui.unit.IntSize(800, 1000),
-                                        color = androidx.compose.ui.graphics.Color(0xFF00E5FF),
-                                        packageName = appInfo.packageName
-                                    )
-                                )
-                            } else {
-                                val launchIntent = packageManager.getLaunchIntentForPackage(appInfo.packageName)
-                                if (launchIntent != null) {
-                                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                                    startActivity(launchIntent)
+                            val launchIntent = packageManager.getLaunchIntentForPackage(appInfo.packageName)
+                            if (launchIntent != null) {
+                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                                if (isFloating) {
+                                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+                                    val bounds = android.graphics.Rect(100, 100, 800, 1200)
+                                    val options = android.app.ActivityOptions.makeBasic().setLaunchBounds(bounds)
+                                    try {
+                                        startActivity(launchIntent, options.toBundle())
+                                    } catch (e: Exception) {
+                                        startActivity(launchIntent)
+                                    }
                                 } else {
-                                    android.widget.Toast.makeText(this@OverlayService, "Cannot launch this app", android.widget.Toast.LENGTH_SHORT).show()
+                                    startActivity(launchIntent)
                                 }
+                            } else {
+                                android.widget.Toast.makeText(this@OverlayService, "Cannot launch this app", android.widget.Toast.LENGTH_SHORT).show()
                             }
                             AppState.sidebarVisible = false
                         },
@@ -246,13 +285,15 @@ class OverlayService : Service() {
                 e.printStackTrace()
             }
         }
-        triggerView?.visibility = View.GONE
+        triggerViewLeft?.visibility = View.GONE
+                    triggerViewRight?.visibility = View.GONE
     }
 
     private fun hideSidebar() {
         sidebarView?.let { windowManager.removeView(it) }
         sidebarView = null
-        triggerView?.visibility = View.VISIBLE
+        triggerViewLeft?.visibility = View.VISIBLE
+                    triggerViewRight?.visibility = View.VISIBLE
     }
 
     private fun showHud() {
@@ -364,9 +405,60 @@ class OverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         job.cancel()
-        triggerView?.let { windowManager.removeView(it) }
+        triggerViewLeft?.let { if(it.parent!=null) windowManager.removeView(it) }
+        triggerViewRight?.let { if(it.parent!=null) windowManager.removeView(it) }
         sidebarView?.let { windowManager.removeView(it) }
         hudView?.let { windowManager.removeView(it) }
         windowViews.values.forEach { windowManager.removeView(it) }
     }
+    private fun showDismissView() {
+        if (dismissView != null) return
+        dismissView = ComposeView(this).apply {
+            setupForCompose()
+            setContent {
+                MyApplicationTheme {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                        Box(
+                            modifier = Modifier
+                                .padding(bottom = 32.dp)
+                                .size(64.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.8f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            androidx.compose.material3.Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = "Close",
+                                tint = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        if (android.provider.Settings.canDrawOverlays(this)) {
+            try {
+                windowManager.addView(dismissView, params)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun hideDismissView() {
+        dismissView?.let { 
+            if (it.parent != null) windowManager.removeView(it)
+        }
+        dismissView = null
+    }
 }
+
+

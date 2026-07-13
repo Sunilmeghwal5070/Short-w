@@ -1,70 +1,31 @@
-@Composable
-fun SystemMonitorHud(windowManager: WindowManager, composeView: ComposeView) {
-  val context = LocalContext.current
-  var availableRam by remember { mutableStateOf("0.0") }
-  var totalRam by remember { mutableStateOf("0.0") }
-  var batteryTemp by remember { mutableStateOf("0°C") }
-  var batteryLevel by remember { mutableStateOf("100%") }
-
-  LaunchedEffect(Unit) {
-      while (true) {
-          try {
-              val activityManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-              val memoryInfo = android.app.ActivityManager.MemoryInfo()
-              activityManager.getMemoryInfo(memoryInfo)
-              val used = (memoryInfo.totalMem - memoryInfo.availMem) / (1024 * 1024 * 1024f)
-              val total = memoryInfo.totalMem / (1024 * 1024 * 1024f)
-              availableRam = String.format("%.1f", used)
-              totalRam = String.format("%.1f", total)
-              
-              val batteryIntent = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
-              if (batteryIntent != null) {
-                  val temp = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0)
-                  batteryTemp = "${temp / 10f}°C"
-                  
-                  val level = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
-                  val scale = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
-                  batteryLevel = "${(level * 100 / scale.toFloat()).toInt()}%"
+      Text("Panel Design", color = ElectricBlue, fontWeight = FontWeight.Bold)
+      Column(
+        modifier = Modifier
+          .clip(RoundedCornerShape(16.dp))
+          .background(SurfaceDark)
+          .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+      ) {
+        Column {
+          Text("Design Style", color = GhostWhite)
+          Spacer(modifier = Modifier.height(8.dp))
+          Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Obsidian)
+          ) {
+            val designs = listOf("Sci-Fi Gamer", "Minimal Sleek")
+            designs.forEachIndexed { index, name ->
+              Box(
+                modifier = Modifier
+                  .weight(1f)
+                  .clickable { AppState.settings = AppState.settings.copy(sidebarDesign = index) }
+                  .background(if (AppState.settings.sidebarDesign == index) NeonPurple else Color.Transparent)
+                  .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+              ) {
+                  Text(name, color = GhostWhite, fontSize = 12.sp)
               }
-          } catch(e: Exception) {}
-          kotlinx.coroutines.delay(2000)
-      }
-  }
-
-  Box(
-    modifier = Modifier
-      .clip(RoundedCornerShape(16.dp))
-      .background(Color.Black.copy(alpha = 0.7f))
-      .border(1.dp, Color(0xFFFFC107).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-      .pointerInput(Unit) {
-        detectDragGestures { change, dragAmount ->
-          change.consume()
-          val params = composeView.layoutParams as WindowManager.LayoutParams
-          params.x += dragAmount.x.toInt()
-          params.y += dragAmount.y.toInt()
-          windowManager.updateViewLayout(composeView, params)
+            }
+          }
         }
       }
-      .padding(16.dp)
-  ) {
-    Column {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.Memory, null, tint = ElectricBlue, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("RAM: $availableRam / $totalRam GB", color = GhostWhite, fontSize = 12.sp)
-      }
-      Spacer(modifier = Modifier.height(4.dp))
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.Speed, null, tint = HyperPink, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("Battery Temp: $batteryTemp", color = GhostWhite, fontSize = 12.sp)
-      }
-      Spacer(modifier = Modifier.height(4.dp))
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.BatteryChargingFull, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("Battery: $batteryLevel", color = GhostWhite, fontSize = 12.sp)
-      }
-    }
-  }
-}
+

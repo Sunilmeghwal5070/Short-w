@@ -1,12 +1,10 @@
 package com.yash.shortw.ui.theme
-
 import androidx.compose.ui.graphics.Color
-
-val Obsidian = Color(0xFFFFFFFF)
-val SurfaceDark = Color(0xFFE3F2FD) // Light Blue background
-val SurfaceGlass = Color(0xE6FFFFFF)
-val ElectricBlue = Color(0xFF1976D2) // Deep Blue for accents
-val HyperPink = Color(0xFF2196F3) // Secondary Blue
-val NeonPurple = Color(0xFF64B5F6) // Light Blue accent
-val GhostWhite = Color(0xFF1A1A1A) // Dark text
-val SoftGray = Color(0xFF455A64) // Secondary text
+val Obsidian = Color(0xFF0F172A) // Deep Slate
+val SurfaceDark = Color(0xFF1E293B) // Slate
+val SurfaceGlass = Color(0x990F172A)
+val ElectricBlue = Color(0xFF38BDF8) // Light Blue
+val HyperPink = Color(0xFFF472B6) // Pink
+val NeonPurple = Color(0xFFA855F7) // Purple
+val GhostWhite = Color(0xFFF8FAFC)
+val SoftGray = Color(0xFF94A3B8)

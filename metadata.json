@@ -1,5 +1,5 @@
 {
-  "name": "short_w",
+  "name": "Short Panel",
   "description": "A premium Multi-Window Manager, Floating Sidebar, and Control Center.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

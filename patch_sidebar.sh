@@ -1,0 +1,1 @@
+sed -i 's/val triggerMode: Int = 0 \/\/ 0 = Visual Slider, 1 = Full Screen Edge/val triggerMode: Int = 0, \/\/ 0 = Visual Slider, 1 = Full Screen Edge\n  val sidebarDesign: Int = 0 \/\/ 0 = Sci-Fi Gamer, 1 = Minimal Sleek/' /app/applet/app/src/main/java/com/yash/shortw/MainActivity.kt
